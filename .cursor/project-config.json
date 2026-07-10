@@ -1,0 +1,38 @@
+{
+  "projectName": "Chaos Parcel",
+  "language": "TypeScript/Node.js",
+  "ui": "Web (React/Vite)",
+  "clientServer": "WebSockets (ws) + Supabase (REST/Edge Functions)",
+  "testing": {
+    "unit": "Vitest",
+    "e2e": null
+  },
+  "decisions": [
+    {
+      "topic": "language",
+      "choice": "TypeScript/Node.js",
+      "reason": "Shared types between server and web client, low-latency WebSocket routing"
+    },
+    {
+      "topic": "ui",
+      "choice": "Web (React/Vite)",
+      "reason": "QR scan opens browser, no install required for party game controllers"
+    },
+    {
+      "topic": "clientServer",
+      "choice": "WebSockets + Supabase",
+      "reason": "Real-time input routing via WS; persistent scores/profiles via Supabase"
+    },
+    {
+      "topic": "host",
+      "choice": "Unity (C#)",
+      "reason": "Physics-authoritative TV host with ragdoll gameplay"
+    },
+    {
+      "topic": "testing",
+      "choice": "Vitest",
+      "reason": "Fast unit tests for shared protocol and room manager"
+    }
+  ],
+  "createdAt": "2026-07-06T00:00:00.000Z"
+}

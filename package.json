@@ -1,0 +1,20 @@
+{
+  "name": "chaos-parcel",
+  "private": true,
+  "scripts": {
+    "start": "bash scripts/dev.sh",
+    "dev": "bash scripts/dev.sh",
+    "dev:server": "pnpm --filter @chaos-parcel/server dev",
+    "dev:client": "pnpm --filter @chaos-parcel/client dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "db:push": "supabase db push",
+    "db:status": "supabase migration list --linked",
+    "db:reset": "supabase db reset",
+    "functions:deploy": "supabase functions deploy save-game-results"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
