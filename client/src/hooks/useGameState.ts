@@ -55,6 +55,7 @@ type Action =
   | { type: 'CLEAR_EXPLOSION' }
   | { type: 'SET_ERROR'; error: string }
   | { type: 'HOST_DISCONNECTED' }
+  | { type: 'SESSION_LOST'; error: string }
   | { type: 'RESET_TO_LOBBY' };
 
 function reducer(state: GameState, action: Action): GameState {
@@ -62,7 +63,8 @@ function reducer(state: GameState, action: Action): GameState {
     case 'SET_JOINED':
       return {
         ...state,
-        screen: 'lobby',
+        // Rejoin mid-game must not kick the player back to the lobby screen.
+        screen: state.screen === 'join' ? 'lobby' : state.screen,
         playerId: action.playerId,
         roomCode: action.roomCode,
         players: action.players,
@@ -70,13 +72,54 @@ function reducer(state: GameState, action: Action): GameState {
       };
     case 'SET_PLAYERS':
       return { ...state, players: action.players };
-    case 'SET_GAME_STATE':
+    case 'SET_GAME_STATE': {
+      // Stale GAME_STATE ticks must not yank the phone off round-end / summary
+      // (otherwise the package holder keeps seeing the panic overlay).
+      // Exception: a new game (IN_GAME) or return to lobby must leave summary.
+      if (state.screen === 'summary') {
+        if (action.payload.status === 'IN_GAME') {
+          return {
+            ...state,
+            screen: 'playing',
+            gameState: action.payload,
+            gameEnd: null,
+            roundEnd: null,
+            lastExplosion: null,
+            cooldowns: action.payload.cooldowns?.[state.playerId ?? ''] ?? defaultCooldowns,
+          };
+        }
+        if (action.payload.status === 'LOBBY') {
+          return {
+            ...state,
+            screen: 'lobby',
+            gameState: action.payload,
+            gameEnd: null,
+            roundEnd: null,
+            lastExplosion: null,
+          };
+        }
+        return state;
+      }
+      if (state.screen === 'round_end') {
+        const endedRound = state.roundEnd?.round ?? 0;
+        if (action.payload.status === 'IN_GAME' && action.payload.round > endedRound) {
+          return {
+            ...state,
+            screen: 'playing',
+            gameState: action.payload,
+            roundEnd: null,
+            cooldowns: action.payload.cooldowns?.[state.playerId ?? ''] ?? state.cooldowns,
+          };
+        }
+        return state;
+      }
       return {
         ...state,
         screen: action.payload.status === 'IN_GAME' ? 'playing' : 'lobby',
         gameState: action.payload,
         cooldowns: action.payload.cooldowns?.[state.playerId ?? ''] ?? state.cooldowns,
       };
+    }
     case 'SET_ROUND_END':
       return { ...state, screen: 'round_end', roundEnd: action.payload };
     case 'SET_GAME_END':
@@ -93,6 +136,12 @@ function reducer(state: GameState, action: Action): GameState {
         screen: 'join',
         error: 'המארח התנתק. סרוק שוב את קוד ה-QR.',
         gameState: null,
+        playerId: null,
+      };
+    case 'SESSION_LOST':
+      return {
+        ...initialState,
+        error: action.error,
       };
     case 'RESET_TO_LOBBY':
       return {

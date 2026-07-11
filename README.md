@@ -1,4 +1,4 @@
-# Chaos Parcel (חבילה עוברת)
+# Chaos Parcel (חבילה מתפוצצת)
 
 Party game where players use their phones as controllers while the TV (Unity Host) runs physics-based gameplay.
 
@@ -16,12 +16,34 @@ Party game where players use their phones as controllers while the TV (Unity Hos
 
 ```bash
 pnpm install
-pnpm start        # one command: shared build + server + client
+pnpm start        # local dev (localhost only)
+pnpm party        # LAN party — TV + phones on same Wi‑Fi
+pnpm party:prod   # LAN party, single port (recommended for TV)
 pnpm dev          # alias for pnpm start
-pnpm dev:server   # WebSocket server only (port 3001)
-pnpm dev:client   # Web client only (port 5173)
 pnpm test         # unit tests
 ```
+
+## מסיבה בבית — מסך ראשי + טלפונים
+
+1. חבר את המחשב, המסך הראשי והטלפונים **לאותה רשת Wi‑Fi**
+2. הרץ:
+   ```bash
+   pnpm party:prod
+   ```
+3. במסך הראשי (דפדפן): פתח את הכתובת שמודפסת, למשל `http://192.168.1.5:3001/host`
+4. שחקנים סורקים את **קוד ה-QR** מהמסך ומצטרפים מהטלפון
+
+**טיפים:**
+- `pnpm party` — פיתוח עם Vite (פורטים 5173 + 3001)
+- `pnpm party:prod` — build אחד, פורט 3001 בלבד (מומלץ למסך הראשי)
+- אם ה-IP לא מזוהה: `LAN_IP=192.168.1.5 pnpm party:prod`
+- ודא ש-Firewall במחשב מאפשר חיבורים נכנסים לפורט 3001
+
+## Monetization (ads placeholders)
+
+- **ליבה חינמית** — משחק מלא בלי תשלום
+- **פרסומות** — מקומות באנר בלובי, בזירה (מסך ראשי), בין סיבובים ובסיכום; בטלפון ב־join / lobby / round_end / summary
+- תשלומי Party Pass / Stripe מושהים בשלב זה (קוד השרת נשאר, בלי UI)
 
 ## Environment
 

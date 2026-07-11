@@ -13,3 +13,5 @@ export type ConnectionRole = (typeof CONNECTION_ROLES)[number];
 
 export const MOVE_THROTTLE_MS = 22; // ~45Hz
 export const MAX_PLAYERS_PER_ROOM = 8;
+/** Keep a player seat after socket drop (phone lock / app switch) so they can rejoin. */
+export const PLAYER_DISCONNECT_GRACE_MS = 45_000;

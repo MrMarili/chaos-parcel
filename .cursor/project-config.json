@@ -1,5 +1,5 @@
 {
-  "projectName": "Chaos Parcel",
+  "projectName": "חבילה מתפוצצת",
   "language": "TypeScript/Node.js",
   "ui": "Web (React/Vite)",
   "clientServer": "WebSockets (ws) + Supabase (REST/Edge Functions)",

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { OutgoingMessage, WsMessage } from '@chaos-parcel/shared';
 import { serializeMessage } from '@chaos-parcel/shared';
-import { WS_URL } from '../config';
+import { resolveWsUrl } from '../config';
 
 interface UseWebSocketOptions {
   role?: 'host' | 'player';
@@ -20,10 +20,18 @@ export function useWebSocket({ role = 'player', onMessage, onOpen, onClose }: Us
   const onOpenRef = useRef(onOpen);
   const onCloseRef = useRef(onClose);
   const unmountedRef = useRef(false);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   onMessageRef.current = onMessage;
   onOpenRef.current = onOpen;
   onCloseRef.current = onClose;
+
+  const clearReconnectTimer = useCallback(() => {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+  }, []);
 
   const connect = useCallback(() => {
     if (unmountedRef.current) return;
@@ -33,7 +41,9 @@ export function useWebSocket({ role = 'player', onMessage, onOpen, onClose }: Us
       return;
     }
 
-    const url = `${WS_URL}?role=${role}`;
+    clearReconnectTimer();
+
+    const url = `${resolveWsUrl()}?role=${role}`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
@@ -64,16 +74,17 @@ export function useWebSocket({ role = 'player', onMessage, onOpen, onClose }: Us
       onCloseRef.current?.();
 
       if (!unmountedRef.current) {
-        setTimeout(() => connect(), RECONNECT_MS);
+        clearReconnectTimer();
+        reconnectTimerRef.current = setTimeout(() => connect(), RECONNECT_MS);
       }
     };
 
     ws.onerror = () => {
       if (!unmountedRef.current) {
-        setError('לא ניתן להתחבר לשרת. ודא ש-pnpm dev:server רץ על פורט 3001');
+        setError('לא ניתן להתחבר לשרת. ודא שהמחשב והטלפון על אותה רשת Wi‑Fi');
       }
     };
-  }, [role]);
+  }, [role, clearReconnectTimer]);
 
   useEffect(() => {
     unmountedRef.current = false;
@@ -81,9 +92,27 @@ export function useWebSocket({ role = 'player', onMessage, onOpen, onClose }: Us
 
     return () => {
       unmountedRef.current = true;
+      clearReconnectTimer();
       const ws = wsRef.current;
       wsRef.current = null;
       ws?.close();
+    };
+  }, [connect, clearReconnectTimer]);
+
+  // Phone unlock / return to browser — force a reconnect if the socket died quietly.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible' || unmountedRef.current) return;
+      const ws = wsRef.current;
+      if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+        connect();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('pageshow', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('pageshow', onVisible);
     };
   }, [connect]);
 

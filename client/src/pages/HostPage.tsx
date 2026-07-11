@@ -3,17 +3,23 @@ import type { PlayerInfo, WsMessage } from '@chaos-parcel/shared';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useWebHostGame } from '../host/useWebHostGame';
 import { HostArena } from '../components/HostArena';
-import { ActivityLog } from '../components/ActivityLog';
-import { PlayerAvatar } from '../components/PlayerAvatar';
+import { HostGameRail } from '../components/HostGameRail';
+import { HostGameSummary } from '../components/HostGameSummary';
+import { PlayerHud } from '../components/PlayerHud';
 import { RoundStandings } from '../components/RoundStandings';
 import { BrandMark } from '../components/BrandMark';
-import { MIN_PLAYERS, TOTAL_ROUNDS } from '../host/hostGameTypes';
+import { MIN_PLAYERS } from '../host/hostGameTypes';
+import { GameHowTo } from '../components/GameHowTo';
+import { AdSlot } from '../components/AdSlot';
+import { HOST_DOCUMENT_TITLE } from '../components/GameTitle';
 
 export function HostPage() {
+  useEffect(() => {
+    document.title = HOST_DOCUMENT_TITLE;
+  }, []);
   const [roomCode, setRoomCode] = useState<string | null>(null);
   const [joinUrl, setJoinUrl] = useState<string | null>(null);
   const [players, setPlayers] = useState<PlayerInfo[]>([]);
-  const [copied, setCopied] = useState(false);
   const gameMessageRef = useRef<(message: WsMessage) => void>(() => {});
 
   const handleRoomMessage = (message: WsMessage) => {
@@ -45,22 +51,23 @@ export function HostPage() {
 
   gameMessageRef.current = handleHostMessage;
 
-  // Create room on every successful host connection
+  // Create room once per host socket connection (avoid wiping a live room).
+  const roomCreateSentRef = useRef(false);
   useEffect(() => {
-    if (connected) {
-      send({
-        event: 'ROOM_CREATE',
-        payload: { host_version: '1.0.0-web' },
-      });
+    if (!connected) {
+      roomCreateSentRef.current = false;
+      return;
     }
+    if (roomCreateSentRef.current) return;
+    roomCreateSentRef.current = true;
+    send({
+      event: 'ROOM_CREATE',
+      payload: {
+        host_version: '1.0.0-web',
+        client_base_url: window.location.origin,
+      },
+    });
   }, [connected, send]);
-
-  const handleCopy = async () => {
-    if (!joinUrl) return;
-    await navigator.clipboard.writeText(joinUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   const qrSrc = joinUrl
     ? `https://quickchart.io/qr?size=240&margin=2&text=${encodeURIComponent(joinUrl)}`
@@ -68,136 +75,162 @@ export function HostPage() {
 
   const holderName = players.find((p) => p.player_id === snapshot.packageHolderId)?.nickname;
 
-  if (snapshot.phase === 'playing' || snapshot.phase === 'round_end' || snapshot.phase === 'summary') {
+  if (snapshot.phase === 'summary' && snapshot.gameEnd) {
+    return (
+      <HostGameSummary
+        gameEnd={snapshot.gameEnd}
+        players={players}
+        onNewGame={startGame}
+        onBackToLobby={resetToLobby}
+      />
+    );
+  }
+
+  if (snapshot.phase === 'playing' || snapshot.phase === 'round_end') {
+    const isRoundEnd = snapshot.phase === 'round_end' && snapshot.roundEndStandings;
+
     return (
       <div className="page host-page host-game">
-        <BrandMark compact tagline="זירת המשחק" />
-        {!connected && (
-          <p className="error-text">החיבור לשרת נותק — רענן את הדף</p>
-        )}
-
-        {snapshot.phase !== 'round_end' && (
-          <div className="host-game-header card">
-            <div className="host-game-stat">
-              <span className="host-label">סיבוב</span>
-              <strong>{snapshot.round}/{TOTAL_ROUNDS}</strong>
+        <div className="host-game-stage">
+          {isRoundEnd ? (
+            <div className="card host-standings-card">
+              <RoundStandings
+                round={snapshot.round}
+                scores={snapshot.roundEndStandings!}
+                countdown={snapshot.roundEndCountdown}
+              />
+              <AdSlot
+                slot="host_round_end"
+                variant="compact"
+                className="host-round-end-ad"
+              />
             </div>
-            <div className="host-game-stat">
-              <span className="host-label">חבילה אצל</span>
-              <strong>{holderName ?? '—'}</strong>
+          ) : (
+            <div className="host-game-play">
+              <div className="host-game-arena-col">
+                <HostArena snapshot={snapshot} />
+                <AdSlot
+                  slot="host_arena"
+                  variant="banner"
+                  className="host-arena-ad"
+                />
+              </div>
+              <HostGameRail
+                snapshot={snapshot}
+                holderName={holderName}
+                connected={connected}
+              />
             </div>
-            <div className="host-game-stat">
-              <span className="host-label">טיימר</span>
-              <strong className={snapshot.packageTimer < 5 ? 'timer-danger' : ''}>
-                {snapshot.packageTimer.toFixed(1)}s
-              </strong>
-            </div>
-          </div>
-        )}
-
-        {snapshot.phase === 'round_end' && snapshot.roundEndStandings ? (
-          <div className="card">
-            <RoundStandings
-              round={snapshot.round}
-              scores={snapshot.roundEndStandings}
-              countdown={snapshot.roundEndCountdown}
-            />
-          </div>
-        ) : (
-          <HostArena snapshot={snapshot} />
-        )}
-
-        {snapshot.phase === 'playing' && <ActivityLog entries={snapshot.activityLog} />}
-
-        {snapshot.phase === 'summary' && (
-          <button
-            type="button"
-            className="btn-primary"
-            onClick={() => {
-              resetToLobby();
-            }}
-          >
-            חזרה ללובי
-          </button>
-        )}
+          )}
+        </div>
       </div>
     );
   }
 
+  const canStart =
+    Boolean(roomCode && connected && players.length >= MIN_PLAYERS);
+
   return (
-    <div className="page host-page">
-      <div className="host-hero">
-        <BrandMark tagline="שחקנים סורקים QR ומצטרפים מהטלפון" />
-      </div>
-
-      {!connected && (
-        <p className="status-text">
-          {roomCode ? 'מתחבר מחדש לשרת...' : 'מתחבר לשרת...'}
-        </p>
-      )}
-      {connected && !roomCode && (
-        <p className="status-text">יוצר חדר...</p>
-      )}
-      {error && <p className="error-text">{error}</p>}
-
-      {roomCode && connected && (
-        <div className="card host-room-card">
-          <p className="host-label">קוד חדר</p>
-          <p className="host-room-code">{roomCode}</p>
-
-          {qrSrc && (
-            <img className="host-qr" src={qrSrc} alt={`QR לחדר ${roomCode}`} width={240} height={240} />
-          )}
-
-          {joinUrl && (
-            <div className="host-url-row">
-              <a className="host-url" href={joinUrl} target="_blank" rel="noreferrer">
-                {joinUrl}
-              </a>
-              <button type="button" className="btn-secondary" onClick={handleCopy}>
-                {copied ? 'הועתק!' : 'העתק'}
-              </button>
-            </div>
-          )}
+    <div
+      className={`page host-page host-lobby host-lobby-with-arena${canStart ? ' host-lobby-ready' : ''}`}
+    >
+      <div className="host-lobby-scroll">
+        <div className="host-hero">
+          <BrandMark compact tagline="סרקו את ה־QR והצטרפו מהטלפון!" />
         </div>
-      )}
 
-      <div className="card">
-        <p className="host-label">שחקנים מחוברים ({players.length})</p>
-        {players.length === 0 ? (
-          <p className="status-text">ממתין לשחקנים...</p>
-        ) : (
-          <ul className="player-list">
-            {players.map((player) => (
-              <li key={player.player_id} className="player-item">
-                <PlayerAvatar
-                  nickname={player.nickname}
-                  color={player.character_color}
-                  avatar={player.avatar}
+        {!connected && (
+          <p className="status-text host-lobby-status">
+            {roomCode ? 'מתחבר מחדש לשרת...' : 'מתחבר לשרת...'}
+          </p>
+        )}
+        {connected && !roomCode && (
+          <p className="status-text host-lobby-status">יוצר חדר...</p>
+        )}
+        {error && <p className="error-text host-lobby-status">{error}</p>}
+
+        <div className="host-lobby-body">
+          <div className="card host-room-card">
+            {roomCode && connected ? (
+              <>
+                <p className="host-label">קוד חדר</p>
+                <p className="host-room-code">{roomCode}</p>
+
+                {qrSrc && (
+                  <img
+                    className="host-qr"
+                    src={qrSrc}
+                    alt={`QR לחדר ${roomCode}`}
+                    width={200}
+                    height={200}
+                  />
+                )}
+
+                {joinUrl && (
+                  <div className="host-url-row">
+                    <a className="host-url" href={joinUrl} target="_blank" rel="noreferrer">
+                      {joinUrl}
+                    </a>
+                  </div>
+                )}
+
+                <AdSlot
+                  slot="host_lobby"
+                  variant="sponsor"
+                  className="host-lobby-sponsor"
                 />
-                <span>{player.nickname}</span>
-              </li>
-            ))}
-          </ul>
+              </>
+            ) : (
+              <p className="status-text">מכין חדר...</p>
+            )}
+          </div>
+
+          <GameHowTo className="host-lobby-howto" />
+
+          <div className="host-lobby-players-wrap">
+            <p className="host-label host-lobby-panel-label">
+              שחקנים מחוברים ({players.length})
+            </p>
+            <div className="card host-players-card">
+              <PlayerHud
+                players={snapshot.arenaPlayers}
+                scores={snapshot.roundScores}
+                holderId={snapshot.packageHolderId}
+                showScores={false}
+              />
+              {players.length === 0 && (
+                <p className="status-text">ממתין לשחקנים...</p>
+              )}
+            </div>
+          </div>
+
+          <div className="host-lobby-arena-wrap">
+            <p className="host-label host-lobby-panel-label">
+              הזיזו עם השלט כדי לבדוק חיבור
+            </p>
+            <HostArena snapshot={snapshot} />
+          </div>
+        </div>
+
+        {roomCode && connected && players.length < MIN_PLAYERS && (
+          <p className="status-text host-lobby-status">
+            צריך לפחות {MIN_PLAYERS} שחקנים כדי להתחיל (מחוברים: {players.length})
+          </p>
+        )}
+
+        {roomCode && !connected && (
+          <p className="error-text host-lobby-status">
+            החדר {roomCode} לא פעיל — המתן לחיבור מחדש או רענן את הדף
+          </p>
         )}
       </div>
 
-      {roomCode && connected && players.length >= MIN_PLAYERS && (
-        <button type="button" className="btn-primary" onClick={startGame}>
-          התחל משחק
-        </button>
-      )}
-
-      {roomCode && connected && players.length > 0 && players.length < MIN_PLAYERS && (
-        <p className="status-text">
-          צריך לפחות {MIN_PLAYERS} שחקנים כדי להתחיל (מחוברים: {players.length})
-        </p>
-      )}
-
-      {roomCode && !connected && (
-        <p className="error-text">
-          החדר {roomCode} לא פעיל — המתן לחיבור מחדש או רענן את הדף
-        </p>
+      {canStart && (
+        <div className="host-lobby-footer">
+          <button type="button" className="btn-primary" onClick={startGame}>
+            התחל משחק
+          </button>
+        </div>
       )}
     </div>
   );

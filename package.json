@@ -4,6 +4,8 @@
   "scripts": {
     "start": "bash scripts/dev.sh",
     "dev": "bash scripts/dev.sh",
+    "party": "bash scripts/party.sh dev",
+    "party:prod": "bash scripts/party.sh prod",
     "dev:server": "pnpm --filter @chaos-parcel/server dev",
     "dev:client": "pnpm --filter @chaos-parcel/client dev",
     "build": "pnpm -r build",

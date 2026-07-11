@@ -1,5 +1,6 @@
 import type { RoundEndPayload } from '@chaos-parcel/shared';
 import { PlayerAvatar } from './PlayerAvatar';
+import { ScoreValue } from './ScoreValue';
 
 interface RoundStandingsProps {
   round: number;
@@ -21,7 +22,11 @@ export function RoundStandings({
       <div className="round-standings-header">
         <h2 className="round-standings-title">סוף סיבוב {round}</h2>
         {countdown != null && countdown > 0 && (
-          <p className="round-standings-countdown">הסיבוב הבא בעוד {countdown}...</p>
+          <div className="round-standings-timer" aria-live="polite">
+            <span className="round-standings-timer-label">הסיבוב הבא בעוד</span>
+            <span className="round-standings-timer-value">{countdown}</span>
+            <span className="round-standings-timer-unit">שניות</span>
+          </div>
         )}
       </div>
 
@@ -43,8 +48,13 @@ export function RoundStandings({
               <div className="round-standings-info">
                 <strong>{entry.nickname}</strong>
                 <span className="round-standings-meta">
-                  סה״כ: {entry.total_score}
-                  {entry.round_score !== 0 && ` · סיבוב: ${entry.round_score}`}
+                  סה״כ: <ScoreValue value={entry.total_score} />
+                  {entry.round_score !== 0 && (
+                    <>
+                      {' · סיבוב: '}
+                      <ScoreValue value={entry.round_score} />
+                    </>
+                  )}
                 </span>
               </div>
               <div className="round-standings-badges">

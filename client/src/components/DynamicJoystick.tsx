@@ -8,100 +8,137 @@ interface JoystickValue {
 interface DynamicJoystickProps {
   onChange: (value: JoystickValue) => void;
   disabled?: boolean;
+  className?: string;
 }
 
-const STICK_RADIUS = 36;
-const BASE_RADIUS = 60;
+const STICK_RADIUS = 40;
+const BASE_RADIUS = 64;
+const DEADZONE = 0.08;
 
-export function DynamicJoystick({ onChange, disabled }: DynamicJoystickProps) {
+/**
+ * Dynamic joystick — all geometry is ref-based so the first finger moves
+ * after touch-down are never computed against a stale React base position.
+ */
+export function DynamicJoystick({ onChange, disabled, className }: DynamicJoystickProps) {
   const areaRef = useRef<HTMLDivElement>(null);
-  const [active, setActive] = useState(false);
-  const [basePos, setBasePos] = useState({ x: 0, y: 0 });
-  const [stickOffset, setStickOffset] = useState({ x: 0, y: 0 });
+  const baseRef = useRef({ x: 0, y: 0 });
+  const activeRef = useRef(false);
   const pointerIdRef = useRef<number | null>(null);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
 
-  const updateStick = useCallback(
+  const [visual, setVisual] = useState<{
+    active: boolean;
+    baseX: number;
+    baseY: number;
+    stickX: number;
+    stickY: number;
+  }>({ active: false, baseX: 0, baseY: 0, stickX: 0, stickY: 0 });
+
+  const emit = useCallback((offsetX: number, offsetY: number) => {
+    let x = offsetX / BASE_RADIUS;
+    let y = offsetY / BASE_RADIUS;
+    const mag = Math.hypot(x, y);
+    if (mag < DEADZONE) {
+      onChangeRef.current({ x: 0, y: 0 });
+      return;
+    }
+    // Remap deadzone → full range so small pushes still feel responsive.
+    const scaled = Math.min(1, (mag - DEADZONE) / (1 - DEADZONE));
+    x = (x / mag) * scaled;
+    y = (y / mag) * scaled;
+    onChangeRef.current({ x, y });
+  }, []);
+
+  const updateFromPointer = useCallback(
     (clientX: number, clientY: number) => {
-      const dx = clientX - basePos.x;
-      const dy = clientY - basePos.y;
+      const dx = clientX - baseRef.current.x;
+      const dy = clientY - baseRef.current.y;
       const distance = Math.hypot(dx, dy);
-      const clampedDistance = Math.min(distance, BASE_RADIUS);
+      const clamped = Math.min(distance, BASE_RADIUS);
       const angle = Math.atan2(dy, dx);
-      const offsetX = Math.cos(angle) * clampedDistance;
-      const offsetY = Math.sin(angle) * clampedDistance;
+      const offsetX = Math.cos(angle) * clamped;
+      const offsetY = Math.sin(angle) * clamped;
 
-      setStickOffset({ x: offsetX, y: offsetY });
-      onChange({
-        x: offsetX / BASE_RADIUS,
-        y: offsetY / BASE_RADIUS,
-      });
+      setVisual((prev) => ({
+        ...prev,
+        stickX: offsetX,
+        stickY: offsetY,
+      }));
+      emit(offsetX, offsetY);
     },
-    [basePos.x, basePos.y, onChange],
+    [emit],
   );
 
   const handlePointerDown = (e: React.PointerEvent) => {
     if (disabled) return;
-    const rect = areaRef.current?.getBoundingClientRect();
-    if (!rect) return;
-
-    pointerIdRef.current = e.pointerId;
+    e.preventDefault();
     areaRef.current?.setPointerCapture(e.pointerId);
-    setActive(true);
-    setBasePos({ x: e.clientX, y: e.clientY });
-    setStickOffset({ x: 0, y: 0 });
-    onChange({ x: 0, y: 0 });
+    pointerIdRef.current = e.pointerId;
+    activeRef.current = true;
+    baseRef.current = { x: e.clientX, y: e.clientY };
+    setVisual({
+      active: true,
+      baseX: e.clientX,
+      baseY: e.clientY,
+      stickX: 0,
+      stickY: 0,
+    });
+    onChangeRef.current({ x: 0, y: 0 });
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
-    if (!active || pointerIdRef.current !== e.pointerId) return;
-    updateStick(e.clientX, e.clientY);
+    if (!activeRef.current || pointerIdRef.current !== e.pointerId) return;
+    e.preventDefault();
+    updateFromPointer(e.clientX, e.clientY);
   };
 
-  const handlePointerUp = (e: React.PointerEvent) => {
+  const endPointer = (e: React.PointerEvent) => {
     if (pointerIdRef.current !== e.pointerId) return;
     pointerIdRef.current = null;
-    setActive(false);
-    setStickOffset({ x: 0, y: 0 });
-    onChange({ x: 0, y: 0 });
+    activeRef.current = false;
+    setVisual((prev) => ({ ...prev, active: false, stickX: 0, stickY: 0 }));
+    onChangeRef.current({ x: 0, y: 0 });
   };
 
   useEffect(() => {
-    if (disabled && active) {
-      setActive(false);
-      setStickOffset({ x: 0, y: 0 });
-      onChange({ x: 0, y: 0 });
+    if (disabled && activeRef.current) {
+      activeRef.current = false;
+      pointerIdRef.current = null;
+      setVisual((prev) => ({ ...prev, active: false, stickX: 0, stickY: 0 }));
+      onChangeRef.current({ x: 0, y: 0 });
     }
-  }, [disabled, active, onChange]);
+  }, [disabled]);
 
   return (
     <div
       ref={areaRef}
-      className="game-bottom"
+      className={className ?? 'game-bottom'}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerUp}
+      onPointerUp={endPointer}
+      onPointerCancel={endPointer}
       style={{ touchAction: 'none' }}
     >
-      {active && (
+      {visual.active && (
         <>
           <div
             className="joystick-base"
-            style={{ left: basePos.x, top: basePos.y, position: 'fixed' }}
+            style={{ left: visual.baseX, top: visual.baseY, position: 'fixed' }}
           />
           <div
             className="joystick-stick"
             style={{
               position: 'fixed',
-              left: basePos.x + stickOffset.x,
-              top: basePos.y + stickOffset.y,
+              left: visual.baseX + visual.stickX,
+              top: visual.baseY + visual.stickY,
               width: STICK_RADIUS,
               height: STICK_RADIUS,
             }}
           />
         </>
       )}
-      {!active && (
+      {!visual.active && (
         <p className="status-text joystick-idle-hint">גע כדי להזיז</p>
       )}
     </div>

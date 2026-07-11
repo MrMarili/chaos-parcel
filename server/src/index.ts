@@ -2,6 +2,9 @@ import 'dotenv/config';
 import cors from 'cors';
 import express from 'express';
 import { createServer } from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { parseIncomingMessage } from '@chaos-parcel/shared';
 import { RoomManager } from './roomManager.js';
@@ -11,17 +14,73 @@ import {
   handleHostRoomCreate,
 } from './handlers/connection.js';
 import type { ClientMeta } from './types.js';
+import { createBillingRouter, handleStripeWebhook } from './billingRoutes.js';
+import { verifyPartyPassToken } from './partyPass.js';
+import { createDeviceProfileRouter } from './deviceProfileStore.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = Number(process.env.PORT ?? 3001);
+const HOST = process.env.HOST ?? '0.0.0.0';
 const WS_PATH = process.env.WS_PATH ?? '/ws';
-const CORS_ORIGIN = process.env.CORS_ORIGIN ?? 'http://localhost:5173';
+const PARTY_MODE = process.env.PARTY_MODE === 'true';
+const SERVE_CLIENT = process.env.SERVE_CLIENT === 'true';
 const JOIN_BASE_URL = process.env.JOIN_BASE_URL ?? 'http://localhost:5173/join';
 
+const CLIENT_DIST = path.resolve(__dirname, '../../client/dist');
+
+const configuredOrigins = (process.env.CORS_ORIGIN ?? 'http://localhost:5173')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+const LAN_ORIGIN =
+  /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/;
+
+function isAllowedOrigin(origin: string | undefined): boolean {
+  if (!origin) return true;
+  if (configuredOrigins.includes(origin)) return true;
+  if (PARTY_MODE && LAN_ORIGIN.test(origin)) return true;
+  return false;
+}
+
 const app = express();
-app.use(cors({ origin: CORS_ORIGIN }));
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (isAllowedOrigin(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+  }),
+);
+
+// Stripe webhooks need the raw body — register before express.json().
+app.post(
+  '/api/billing/webhook',
+  express.raw({ type: 'application/json' }),
+  (req, res) => {
+    void handleStripeWebhook(req, res);
+  },
+);
+
+app.use(express.json({ limit: '100kb' }));
+
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({ status: 'ok', timestamp: new Date().toISOString(), party_mode: PARTY_MODE });
 });
+
+app.use('/api/billing', createBillingRouter());
+app.use('/api/device-profiles', createDeviceProfileRouter());
+
+if (SERVE_CLIENT && fs.existsSync(path.join(CLIENT_DIST, 'index.html'))) {
+  app.use(express.static(CLIENT_DIST));
+  app.get(/^(?!\/(health|api|ws)).*/, (_req, res) => {
+    res.sendFile(path.join(CLIENT_DIST, 'index.html'));
+  });
+}
 
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: WS_PATH });
@@ -44,12 +103,17 @@ wss.on('connection', (socket, request) => {
       try {
         const message = parseIncomingMessage(JSON.parse(raw), 'host');
         if (message.event === 'ROOM_CREATE') {
+          const joinBase = message.payload.client_base_url
+            ? `${message.payload.client_base_url.replace(/\/$/, '')}/join`
+            : JOIN_BASE_URL;
+          const hasPass = Boolean(verifyPartyPassToken(message.payload.party_pass_token));
           handleHostRoomCreate(
             roomManager,
             socket,
             meta,
             message.payload.host_version,
-            JOIN_BASE_URL,
+            joinBase,
+            { hasPass },
           );
           return;
         }
@@ -63,18 +127,25 @@ wss.on('connection', (socket, request) => {
   });
 
   socket.on('close', () => {
-    handleDisconnect(roomManager, meta);
+    handleDisconnect(roomManager, meta, socket);
     connectionMeta.delete(socket);
   });
 
   socket.on('error', () => {
-    handleDisconnect(roomManager, meta);
+    handleDisconnect(roomManager, meta, socket);
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`Chaos Parcel server listening on http://localhost:${PORT}`);
-  console.log(`WebSocket endpoint: ws://localhost:${PORT}${WS_PATH}`);
+server.listen(PORT, HOST, () => {
+  const bind = HOST === '0.0.0.0' ? 'all interfaces' : HOST;
+  console.log(`Chaos Parcel server listening on http://${bind}:${PORT}`);
+  console.log(`WebSocket endpoint: ws://<your-lan-ip>:${PORT}${WS_PATH}`);
+  if (SERVE_CLIENT) {
+    console.log(`Client UI: http://<your-lan-ip>:${PORT}/host`);
+  }
+  if (PARTY_MODE) {
+    console.log('Party mode: LAN origins allowed for CORS');
+  }
 });
 
 server.on('error', (err: NodeJS.ErrnoException) => {

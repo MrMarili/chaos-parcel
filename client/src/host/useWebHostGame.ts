@@ -1,26 +1,43 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AbilityType, PlayerInfo, WsMessage } from '@chaos-parcel/shared';
 import { ABILITY_LABELS } from '../config';
+import { generateRoundObstacles } from './arenaObstacles';
 import {
   type ArenaPlayer,
   type HostGameSnapshot,
   type LogType,
   PACKAGE_TIMER_MAX,
+  PACKAGE_PASS_RANGE,
   ROUND_DURATION_SEC,
   ROUND_END_PAUSE_SEC,
   EXPLOSION_DISPLAY_MS,
   TOTAL_ROUNDS,
-  MOVE_SPEED,
+  MOVE_SPEED_PER_SEC,
+  PACKAGE_MOVE_MULTIPLIER,
   MIN_PLAYERS,
   buildGameStatePayload,
-  clamp01,
   displayName,
   findNearestPlayer,
   ltrName,
   makeLog,
   pickRandomHolder,
-  playerInfoToArena,
+  resolvePlayerName,
 } from './hostGameTypes';
+import { placeRosterSpread, syncArenaPlayers } from './playerSpawn';
+import {
+  canSeePlayer,
+  clearAllVelocities,
+  confusePlayer,
+  freezePlayer,
+  applyShockwave,
+  magnetizePlayer,
+  readPositionsInto,
+  resetMovementRuntime,
+  setArenaObstacles,
+  setPlayerVelocity,
+  syncMovementPlayers,
+  tickMovement,
+} from './movementRuntime';
 
 type SendFn = (message: Record<string, unknown>) => boolean;
 
@@ -30,7 +47,9 @@ function createInitialSnapshot(): HostGameSnapshot {
     round: 1,
     packageHolderId: null,
     packageTimer: PACKAGE_TIMER_MAX,
+    roundRemainingSec: ROUND_DURATION_SEC,
     arenaPlayers: [],
+    obstacles: [],
     activityLog: [],
     roundScores: {},
     roundExplosionCounts: {},
@@ -39,6 +58,7 @@ function createInitialSnapshot(): HostGameSnapshot {
     lastExplosion: null,
     roundEndCountdown: null,
     roundEndStandings: null,
+    gameEnd: null,
   };
 }
 
@@ -52,6 +72,7 @@ export function useWebHostGame(
   const playersRef = useRef(players);
   const roundElapsedRef = useRef(0);
   const roundEndTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastReactSyncRef = useRef(0);
 
   snapshotRef.current = snapshot;
   playersRef.current = players;
@@ -59,16 +80,20 @@ export function useWebHostGame(
   const pushLog = useCallback((type: LogType, text: string) => {
     setSnapshot((prev) => ({
       ...prev,
-      activityLog: [makeLog(type, text), ...prev.activityLog].slice(0, 12),
+        activityLog: [makeLog(type, text), ...prev.activityLog].slice(0, 40),
     }));
   }, []);
 
   const broadcastState = useCallback(
     (next: HostGameSnapshot) => {
       if (!roomCode) return;
+      const live: HostGameSnapshot = {
+        ...next,
+        arenaPlayers: readPositionsInto(next.arenaPlayers),
+      };
       send({
         event: 'GAME_STATE',
-        payload: buildGameStatePayload(roomCode, next, playersRef.current),
+        payload: buildGameStatePayload(roomCode, live, playersRef.current),
       });
     },
     [roomCode, send],
@@ -78,14 +103,18 @@ export function useWebHostGame(
     (updater: (prev: HostGameSnapshot) => HostGameSnapshot, broadcast = true) => {
       setSnapshot((prev) => {
         const next = updater(prev);
-        snapshotRef.current = next;
-        if (broadcast && next.phase === 'playing' && roomCode) {
+        const live: HostGameSnapshot = {
+          ...next,
+          arenaPlayers: readPositionsInto(next.arenaPlayers),
+        };
+        snapshotRef.current = live;
+        if (broadcast && live.phase === 'playing' && roomCode) {
           send({
             event: 'GAME_STATE',
-            payload: buildGameStatePayload(roomCode, next, playersRef.current),
+            payload: buildGameStatePayload(roomCode, live, playersRef.current),
           });
         }
-        return next;
+        return live;
       });
     },
     [roomCode, send],
@@ -103,28 +132,79 @@ export function useWebHostGame(
   );
 
   const startGame = useCallback(() => {
-    if (!roomCode || players.length < MIN_PLAYERS) return;
+    if (!roomCode) return;
 
+    // Prefer currently connected players; fall back to arena / last finale roster
+    // so "משחק חדש" still works after the summary screen.
+    const byId = new Map<string, PlayerInfo>();
+    for (const p of playersRef.current) {
+      byId.set(p.player_id, p);
+    }
+    for (const p of snapshotRef.current.arenaPlayers) {
+      if (byId.has(p.playerId)) continue;
+      byId.set(p.playerId, {
+        player_id: p.playerId,
+        nickname: p.nickname,
+        character_color: p.color,
+        ...(p.avatar ? { avatar: p.avatar } : {}),
+      });
+    }
+    const finale = snapshotRef.current.gameEnd?.final_scores;
+    if (finale) {
+      for (const s of finale) {
+        if (byId.has(s.player_id)) continue;
+        byId.set(s.player_id, {
+          player_id: s.player_id,
+          nickname: s.nickname,
+          character_color: '#5B8DEF',
+        });
+      }
+    }
+
+    const roster = [...byId.values()];
+    if (roster.length < MIN_PLAYERS) {
+      // Surface why the button appears dead (common when only one player remains).
+      window.alert(`צריך לפחות ${MIN_PLAYERS} שחקנים כדי להתחיל משחק חדש (מחוברים: ${roster.length}).`);
+      return;
+    }
+
+    // Clear any leftover round-end timer from the previous match.
+    if (roundEndTimerRef.current) {
+      clearInterval(roundEndTimerRef.current);
+      roundEndTimerRef.current = null;
+    }
+
+    // Re-open the room on the server (GAME_END sets status FINISHED).
     send({ event: 'HOST_START', payload: { room_code: roomCode } });
 
-    const arenaPlayers = players.map((p, i) => playerInfoToArena(p, i));
+    clearAllVelocities();
+    resetMovementRuntime();
+
+    // Always reshuffle around fresh obstacles; package holder is random each start.
+    const obstacles = generateRoundObstacles();
+    setArenaObstacles(obstacles);
+    const arenaPlayers = placeRosterSpread(roster, obstacles);
+
     const scores: Record<string, number> = {};
-    players.forEach((p) => {
+    roster.forEach((p) => {
       scores[p.player_id] = 0;
     });
 
     const { packageHolderId, packageTimer } = assignPackage(arenaPlayers);
     roundElapsedRef.current = 0;
 
-    const holder = players.find((p) => p.player_id === packageHolderId);
+    const holder = roster.find((p) => p.player_id === packageHolderId);
+
     const next: HostGameSnapshot = {
       phase: 'playing',
       round: 1,
       packageHolderId,
       packageTimer,
+      roundRemainingSec: ROUND_DURATION_SEC,
       arenaPlayers,
+      obstacles,
       activityLog: [
-        makeLog('start', `המשחק התחיל! החבילה אצל ${ltrName(displayName(holder?.nickname))}`),
+        makeLog('start', `משחק חדש! החבילה אצל ${ltrName(displayName(holder?.nickname))}`),
       ],
       roundScores: scores,
       roundExplosionCounts: {},
@@ -133,23 +213,47 @@ export function useWebHostGame(
       lastExplosion: null,
       roundEndCountdown: null,
       roundEndStandings: null,
+      gameEnd: null,
     };
 
     setSnapshot(next);
     snapshotRef.current = next;
+    syncMovementPlayers(arenaPlayers, { resetPositions: true });
+    // Explicit IN_GAME broadcast so phones leave the summary screen.
     broadcastState(next);
-  }, [roomCode, players, send, assignPackage, broadcastState]);
+  }, [roomCode, send, assignPackage, broadcastState]);
+
+  const concludeGameRef = useRef<
+    (
+      nextTotals: Record<string, number>,
+      opts?: {
+        roundExplosionCounts?: Record<string, number>;
+        timeWithoutPackage?: Record<string, number>;
+        logText?: string;
+      },
+    ) => void
+  >(() => {});
 
   const startNextRound = useCallback(() => {
     if (!roomCode) return;
     const current = snapshotRef.current;
+
+    if (playersRef.current.length < MIN_PLAYERS) {
+      concludeGameRef.current(current.roundScores, {
+        logText: 'לא נשארו מספיק שחקנים — המשחק הסתיים',
+      });
+      return;
+    }
 
     if (roundEndTimerRef.current) {
       clearInterval(roundEndTimerRef.current);
       roundEndTimerRef.current = null;
     }
 
-    const arenaPlayers = playersRef.current.map((p, i) => playerInfoToArena(p, i));
+    clearAllVelocities();
+    const obstacles = generateRoundObstacles();
+    setArenaObstacles(obstacles);
+    const arenaPlayers = placeRosterSpread(playersRef.current, obstacles);
     const { packageHolderId, packageTimer } = assignPackage(arenaPlayers);
     const holder = playersRef.current.find((p) => p.player_id === packageHolderId);
     roundElapsedRef.current = 0;
@@ -160,12 +264,15 @@ export function useWebHostGame(
       round: current.round + 1,
       packageHolderId,
       packageTimer,
+      roundRemainingSec: ROUND_DURATION_SEC,
       arenaPlayers,
+      obstacles,
       roundExplosionCounts: {},
       timeWithoutPackage: {},
       lastExplosion: null,
       roundEndCountdown: null,
       roundEndStandings: null,
+      gameEnd: null,
       activityLog: [
         makeLog('round', `סיבוב ${current.round + 1} התחיל — החבילה אצל ${ltrName(displayName(holder?.nickname))}`),
         ...current.activityLog,
@@ -174,8 +281,139 @@ export function useWebHostGame(
 
     setSnapshot(next);
     snapshotRef.current = next;
+    syncMovementPlayers(arenaPlayers, { resetPositions: true });
     broadcastState(next);
   }, [roomCode, assignPackage, broadcastState]);
+
+  const concludeGame = useCallback(
+    (
+      nextTotals: Record<string, number>,
+      opts?: {
+        roundExplosionCounts?: Record<string, number>;
+        timeWithoutPackage?: Record<string, number>;
+        logText?: string;
+      },
+    ) => {
+      if (!roomCode) return;
+      const current = snapshotRef.current;
+      if (current.phase === 'summary' || current.phase === 'lobby') return;
+
+      if (roundEndTimerRef.current) {
+        clearInterval(roundEndTimerRef.current);
+        roundEndTimerRef.current = null;
+      }
+      clearAllVelocities();
+
+      const roundExplosionCounts = opts?.roundExplosionCounts ?? current.roundExplosionCounts;
+      const timeWithoutPackage = opts?.timeWithoutPackage ?? current.timeWithoutPackage;
+      const abilitiesReceived = current.abilitiesReceived;
+
+      // Include everyone who scored this game — not only players still connected at the end.
+      type RosterEntry = {
+        player_id: string;
+        nickname: string;
+        character_color: string;
+        avatar?: string;
+      };
+      const byId = new Map<string, RosterEntry>();
+      for (const p of playersRef.current) {
+        byId.set(p.player_id, {
+          player_id: p.player_id,
+          nickname: p.nickname,
+          character_color: p.character_color,
+          ...(p.avatar ? { avatar: p.avatar } : {}),
+        });
+      }
+      for (const p of current.arenaPlayers) {
+        if (byId.has(p.playerId)) continue;
+        byId.set(p.playerId, {
+          player_id: p.playerId,
+          nickname: p.nickname,
+          character_color: p.color,
+          ...(p.avatar ? { avatar: p.avatar } : {}),
+        });
+      }
+      for (const id of Object.keys(nextTotals)) {
+        if (byId.has(id)) continue;
+        byId.set(id, {
+          player_id: id,
+          nickname: 'שחקן',
+          character_color: '#888888',
+        });
+      }
+
+      const ranked = [...byId.values()].sort(
+        (a, b) => (nextTotals[b.player_id] ?? 0) - (nextTotals[a.player_id] ?? 0),
+      );
+
+      const mostTargeted =
+        ranked.length > 0
+          ? ranked.reduce((best, p) =>
+              (abilitiesReceived[p.player_id] ?? 0) > (abilitiesReceived[best.player_id] ?? 0)
+                ? p
+                : best,
+            ranked[0]!)
+          : null;
+
+      const earlyEnd = Boolean(opts?.logText);
+      const funFacts: Record<string, string> = {};
+      for (const p of ranked) {
+        const received = abilitiesReceived[p.player_id] ?? 0;
+        if (earlyEnd && ranked.length === 1) {
+          funFacts[p.player_id] = 'נשארת אחרון בזירה — כל הכבוד!';
+        } else if (earlyEnd) {
+          funFacts[p.player_id] = 'המשחק נעצר כי לא נשארו מספיק שחקנים.';
+        } else if (mostTargeted && p.player_id === mostTargeted.player_id && received > 0) {
+          funFacts[p.player_id] =
+            `היית השחקן הכי פחות אהוב בחדר: הפעילו עליך ${received} יכולות כאוס!`;
+        } else if ((roundExplosionCounts[p.player_id] ?? 0) > 0) {
+          funFacts[p.player_id] = `החבילה אהבה אותך קצת יותר מדי בסיבוב האחרון...`;
+        } else {
+          funFacts[p.player_id] = `שרדת כמו אלוף — תמשיך לברוח מהחבילה!`;
+        }
+      }
+
+      const gameEndPayload = {
+        room_code: roomCode,
+        final_scores: ranked.map((p, i) => ({
+          player_id: p.player_id,
+          nickname: p.nickname,
+          total_score: nextTotals[p.player_id] ?? 0,
+          rank: i + 1,
+          stats: {
+            abilities_received: abilitiesReceived[p.player_id] ?? 0,
+            bombs_exploded: roundExplosionCounts[p.player_id] ?? 0,
+            time_without_package_seconds: Math.floor(timeWithoutPackage[p.player_id] ?? 0),
+          },
+        })),
+        fun_facts: funFacts,
+      };
+
+      send({
+        event: 'GAME_END',
+        payload: gameEndPayload,
+      });
+
+      const next: HostGameSnapshot = {
+        ...current,
+        phase: 'summary',
+        roundScores: nextTotals,
+        roundEndCountdown: null,
+        roundEndStandings: null,
+        packageHolderId: null,
+        packageTimer: 0,
+        gameEnd: gameEndPayload,
+        activityLog: [
+          makeLog('end', opts?.logText ?? 'המשחק הסתיים!'),
+          ...current.activityLog,
+        ].slice(0, 40),
+      };
+      setSnapshot(next);
+      snapshotRef.current = next;
+    },
+    [roomCode, send],
+  );
+  concludeGameRef.current = concludeGame;
 
   const finishRound = useCallback(() => {
     if (!roomCode) return;
@@ -221,54 +459,15 @@ export function useWebHostGame(
       },
     });
 
-    if (current.round >= TOTAL_ROUNDS) {
-      const ranked = [...playersRef.current].sort(
-        (a, b) => (nextTotals[b.player_id] ?? 0) - (nextTotals[a.player_id] ?? 0),
-      );
-
-      const abilitiesReceived = current.abilitiesReceived;
-      const mostTargeted = ranked.reduce((best, p) =>
-        (abilitiesReceived[p.player_id] ?? 0) > (abilitiesReceived[best.player_id] ?? 0) ? p : best,
-      ranked[0]!);
-
-      const funFacts: Record<string, string> = {};
-      for (const p of ranked) {
-        const received = abilitiesReceived[p.player_id] ?? 0;
-        if (p.player_id === mostTargeted.player_id && received > 0) {
-          funFacts[p.player_id] = `היית השחקן הכי פחות אהוב בחדר: הפעילו עליך ${received} יכולות כאוס!`;
-        } else if ((roundExplosionCounts[p.player_id] ?? 0) > 0) {
-          funFacts[p.player_id] = `החבילה אהבה אותך קצת יותר מדי בסיבוב האחרון...`;
-        } else {
-          funFacts[p.player_id] = `שרדת כמו אלוף — תמשיך לברוח מהחבילה!`;
-        }
-      }
-
-      send({
-        event: 'GAME_END',
-        payload: {
-          room_code: roomCode,
-          final_scores: ranked.map((p, i) => ({
-            player_id: p.player_id,
-            nickname: p.nickname,
-            total_score: nextTotals[p.player_id] ?? 0,
-            rank: i + 1,
-            stats: {
-              abilities_received: abilitiesReceived[p.player_id] ?? 0,
-              bombs_exploded: roundExplosionCounts[p.player_id] ?? 0,
-              time_without_package_seconds: Math.floor(timeWithoutPackage[p.player_id] ?? 0),
-            },
-          })),
-          fun_facts: funFacts,
-        },
+    if (current.round >= TOTAL_ROUNDS || playersRef.current.length < MIN_PLAYERS) {
+      concludeGame(nextTotals, {
+        roundExplosionCounts,
+        timeWithoutPackage,
+        logText:
+          playersRef.current.length < MIN_PLAYERS
+            ? 'לא נשארו מספיק שחקנים — המשחק הסתיים'
+            : undefined,
       });
-
-      setSnapshot((prev) => ({
-        ...prev,
-        phase: 'summary',
-        roundScores: nextTotals,
-        roundEndCountdown: null,
-        activityLog: [makeLog('end', 'המשחק הסתיים!'), ...prev.activityLog],
-      }));
       return;
     }
 
@@ -291,6 +490,8 @@ export function useWebHostGame(
     const next: HostGameSnapshot = {
       ...current,
       phase: 'round_end',
+      packageHolderId: null,
+      packageTimer: 0,
       roundScores: nextTotals,
       roundEndCountdown: countdown,
       roundEndStandings: standings,
@@ -301,6 +502,7 @@ export function useWebHostGame(
       ].slice(0, 12),
     };
 
+    clearAllVelocities();
     setSnapshot(next);
     snapshotRef.current = next;
 
@@ -321,44 +523,122 @@ export function useWebHostGame(
         return updated;
       });
     }, 1000);
-  }, [roomCode, send, startNextRound]);
+  }, [roomCode, send, startNextRound, concludeGame]);
 
   const endRound = finishRound;
 
-  const handlePlayerMove = useCallback(
-    (playerId: string, x: number, y: number) => {
-      if (snapshotRef.current.phase !== 'playing') return;
-      if (Math.abs(x) < 0.05 && Math.abs(y) < 0.05) return;
+  const handlePlayerMove = useCallback((playerId: string, x: number, y: number) => {
+    const phase = snapshotRef.current.phase;
+    if (phase !== 'playing' && phase !== 'lobby') return;
+    setPlayerVelocity(playerId, x, y);
+  }, []);
 
-      applySnapshot((prev) => ({
-        ...prev,
-        arenaPlayers: prev.arenaPlayers.map((p) =>
-          p.playerId === playerId
-            ? {
-                ...p,
-                x: clamp01(p.x + x * MOVE_SPEED),
-                y: clamp01(p.y + y * MOVE_SPEED),
-              }
-            : p,
-        ),
-      }), false);
-    },
-    [applySnapshot],
-  );
+  // Smooth host-side integration → direct DOM (React only syncs occasionally)
+  useEffect(() => {
+    if (snapshot.phase !== 'playing' && snapshot.phase !== 'lobby') return;
+
+    syncMovementPlayers(snapshotRef.current.arenaPlayers);
+
+    let last = performance.now();
+    let frameId = 0;
+
+    const tick = (now: number) => {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+
+      const current = snapshotRef.current;
+      tickMovement(
+        dt,
+        current.packageHolderId,
+        MOVE_SPEED_PER_SEC,
+        PACKAGE_MOVE_MULTIPLIER,
+      );
+
+      // Keep logical positions fresh for pass / nearest-player without re-rendering.
+      const syncedPlayers = readPositionsInto(current.arenaPlayers);
+      snapshotRef.current = { ...current, arenaPlayers: syncedPlayers };
+
+      // Occasional React sync so HUD / lists stay consistent (not every frame).
+      if (now - lastReactSyncRef.current > 100) {
+        lastReactSyncRef.current = now;
+        setSnapshot((prev) => {
+          if (prev.phase !== 'playing' && prev.phase !== 'lobby') return prev;
+          return { ...prev, arenaPlayers: readPositionsInto(prev.arenaPlayers) };
+        });
+      }
+
+      frameId = requestAnimationFrame(tick);
+    };
+
+    frameId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frameId);
+  }, [snapshot.phase]);
 
   const handleAbility = useCallback(
     (playerId: string, ability: AbilityType, targetId?: string) => {
-      const actor = playersRef.current.find((p) => p.player_id === playerId);
-      const target = playersRef.current.find(
-        (p) => p.player_id === (targetId ?? playerId),
-      );
+      const current = snapshotRef.current;
+      if (current.phase !== 'playing') return;
+
+      const arenaPlayers = readPositionsInto(current.arenaPlayers);
+      const caster = arenaPlayers.find((p) => p.playerId === playerId);
+      if (!caster) return;
+
+      const others = arenaPlayers.filter((p) => p.playerId !== playerId);
+      const needsRival = ability === 'FREEZE' || ability === 'CONFUSION';
+
+      let victimId = targetId;
+      if (needsRival) {
+        const visibleOthers = others.filter((p) => canSeePlayer(caster, p));
+        const requested =
+          targetId != null
+            ? arenaPlayers.find((p) => p.playerId === targetId && p.playerId !== playerId)
+            : null;
+        const rival =
+          (requested && canSeePlayer(caster, requested) ? requested : null) ??
+          findNearestPlayer(caster, visibleOthers, 2) ??
+          null;
+        if (!rival) {
+          pushLog(
+            'info',
+            visibleOthers.length === 0 && others.length > 0
+              ? 'אין קו ראייה ליריב — המכשול חוסם'
+              : 'אין יריב להפעיל עליו את היכולת',
+          );
+          return;
+        }
+        victimId = rival.playerId;
+      } else {
+        // SHOCKWAVE / MAGNET act from / on the caster (shockwave filters LoS internally).
+        victimId = playerId;
+      }
+
+      const victim = arenaPlayers.find((p) => p.playerId === victimId) ?? caster;
+
+      switch (ability) {
+        case 'FREEZE':
+          freezePlayer(victimId);
+          break;
+        case 'SHOCKWAVE':
+          applyShockwave(playerId);
+          break;
+        case 'MAGNET':
+          magnetizePlayer(playerId);
+          break;
+        case 'CONFUSION':
+          confusePlayer(victimId);
+          break;
+      }
+
       pushLog(
         'ability',
-        `${ltrName(displayName(actor?.nickname))} הפעיל ${ABILITY_LABELS[ability]} על ${ltrName(displayName(target?.nickname))}`,
+        needsRival
+          ? `${ltrName(displayName(caster.nickname))} הפעיל ${ABILITY_LABELS[ability]} על ${ltrName(displayName(victim.nickname))}`
+          : `${ltrName(displayName(caster.nickname))} הפעיל ${ABILITY_LABELS[ability]}`,
       );
-      const victimId = targetId ?? playerId;
+
       setSnapshot((prev) => ({
         ...prev,
+        arenaPlayers: readPositionsInto(prev.arenaPlayers),
         abilitiesReceived: {
           ...prev.abilitiesReceived,
           [victimId]: (prev.abilitiesReceived[victimId] ?? 0) + 1,
@@ -376,29 +656,49 @@ export function useWebHostGame(
       const from = current.arenaPlayers.find((p) => p.playerId === playerId);
       if (!from) return;
 
-      const others = current.arenaPlayers.filter((p) => p.playerId !== playerId);
+      const arenaPlayers = readPositionsInto(current.arenaPlayers);
+      const fromLive = arenaPlayers.find((p) => p.playerId === playerId) ?? from;
+      const others = arenaPlayers.filter((p) => p.playerId !== playerId);
       if (others.length === 0) {
-        pushLog('info', 'אין שחקן אחר למסור לו');
+        if (playersRef.current.length < MIN_PLAYERS) {
+          concludeGame(current.roundScores, {
+            logText: 'לא נשארו מספיק שחקנים — המשחק הסתיים',
+          });
+        } else {
+          pushLog('info', 'אין שחקן אחר למסור לו');
+        }
         return;
       }
 
+      const requested =
+        targetId != null
+          ? arenaPlayers.find((p) => p.playerId === targetId && p.playerId !== playerId)
+          : undefined;
+      const nearby = findNearestPlayer(fromLive, arenaPlayers, PACKAGE_PASS_RANGE);
       const target =
-        current.arenaPlayers.find((p) => p.playerId === targetId && p.playerId !== playerId) ??
-        findNearestPlayer(from, current.arenaPlayers) ??
-        others[Math.floor(Math.random() * others.length)]!;
+        requested &&
+        Math.hypot(requested.x - fromLive.x, requested.y - fromLive.y) < PACKAGE_PASS_RANGE
+          ? requested
+          : nearby;
+
+      if (!target) {
+        pushLog('info', 'צריך להתקרב לשחקן כדי למסור');
+        return;
+      }
 
       const passer = playersRef.current.find((p) => p.player_id === playerId);
       applySnapshot((prev) => ({
         ...prev,
         packageHolderId: target.playerId,
-        packageTimer: PACKAGE_TIMER_MAX,
+        // Each pass shortens the fuse by 1 second (floor at 1s).
+        packageTimer: Math.max(1, prev.packageTimer - 1),
         activityLog: [
           makeLog('pass', `${ltrName(displayName(passer?.nickname))} מסר את החבילה ל-${ltrName(displayName(target.nickname))}`),
           ...prev.activityLog,
         ].slice(0, 12),
       }));
     },
-    [applySnapshot, pushLog],
+    [applySnapshot, pushLog, concludeGame],
   );
 
   const handleHostMessage = useCallback(
@@ -423,8 +723,16 @@ export function useWebHostGame(
           message.payload.target_player_id,
         );
       }
+      // Rejoining mid-game: push current state immediately so the phone isn't stuck
+      // waiting for the next 250ms tick (and so they leave the reconnect banner).
+      if (message.event === 'PLAYER_JOINED') {
+        const snap = snapshotRef.current;
+        if (snap.phase === 'playing' || snap.phase === 'round_end') {
+          broadcastState(snap);
+        }
+      }
     },
-    [handlePlayerMove, handleAbility, handlePassPackage],
+    [handlePlayerMove, handleAbility, handlePassPackage, broadcastState],
   );
 
   // Game timer tick
@@ -432,7 +740,13 @@ export function useWebHostGame(
     if (snapshot.phase !== 'playing') return;
 
     const interval = setInterval(() => {
+      if (snapshotRef.current.phase !== 'playing') return;
+
       roundElapsedRef.current += 0.25;
+      const roundRemainingSec = Math.max(
+        0,
+        ROUND_DURATION_SEC - roundElapsedRef.current,
+      );
 
       setSnapshot((prev) => {
         if (prev.phase !== 'playing') return prev;
@@ -457,8 +771,11 @@ export function useWebHostGame(
 
         if (packageTimer <= 0 && packageHolderId) {
           const explodedId = packageHolderId;
-          const holder = playersRef.current.find((p) => p.player_id === explodedId);
-          const holderName = displayName(holder?.nickname);
+          const holderName = resolvePlayerName(
+            explodedId,
+            arenaPlayers,
+            playersRef.current,
+          );
 
           roundScores = {
             ...roundScores,
@@ -473,8 +790,11 @@ export function useWebHostGame(
           const assigned = assignPackage(arenaPlayers, explodedId);
           packageHolderId = assigned.packageHolderId;
           packageTimer = assigned.packageTimer;
-          const newHolder = playersRef.current.find((p) => p.player_id === packageHolderId);
-          const newHolderName = displayName(newHolder?.nickname);
+          const newHolderName = resolvePlayerName(
+            packageHolderId,
+            arenaPlayers,
+            playersRef.current,
+          );
 
           const explosionStartedAt = Date.now();
           const lastExplosion = {
@@ -508,11 +828,13 @@ export function useWebHostGame(
             ...prev,
             packageTimer,
             packageHolderId,
+            roundRemainingSec,
             roundScores,
             roundExplosionCounts,
             timeWithoutPackage,
             lastExplosion,
             activityLog,
+            arenaPlayers: readPositionsInto(arenaPlayers),
           };
 
           snapshotRef.current = next;
@@ -540,9 +862,11 @@ export function useWebHostGame(
           ...prev,
           packageTimer,
           packageHolderId,
+          roundRemainingSec,
           roundScores,
           timeWithoutPackage,
           activityLog,
+          arenaPlayers: readPositionsInto(arenaPlayers),
         };
 
         snapshotRef.current = next;
@@ -565,14 +889,24 @@ export function useWebHostGame(
     return () => clearInterval(interval);
   }, [snapshot.phase, roomCode, send, assignPackage, endRound]);
 
-  // Sync arena when new players join mid-lobby
+  // Keep arena tokens in sync with roster (lobby + in-game leavers after grace).
   useEffect(() => {
-    if (snapshot.phase !== 'lobby') return;
-    setSnapshot((prev) => ({
-      ...prev,
-      arenaPlayers: players.map((p, i) => playerInfoToArena(p, i)),
-    }));
+    if (snapshot.phase !== 'lobby' && snapshot.phase !== 'playing') return;
+    setSnapshot((prev) => {
+      const arenaPlayers = syncArenaPlayers(players, prev.arenaPlayers, prev.obstacles);
+      syncMovementPlayers(arenaPlayers);
+      return { ...prev, arenaPlayers };
+    });
   }, [players, snapshot.phase]);
+
+  // Too few players left mid-game / between rounds → go straight to the finale.
+  useEffect(() => {
+    if (snapshot.phase !== 'playing' && snapshot.phase !== 'round_end') return;
+    if (players.length >= MIN_PLAYERS) return;
+    concludeGame(snapshotRef.current.roundScores, {
+      logText: 'לא נשארו מספיק שחקנים — המשחק הסתיים',
+    });
+  }, [players.length, snapshot.phase, concludeGame]);
 
   useEffect(() => {
     return () => {
@@ -586,6 +920,26 @@ export function useWebHostGame(
     snapshot,
     startGame,
     handleHostMessage,
-    resetToLobby: () => setSnapshot(createInitialSnapshot()),
+    resetToLobby: () => {
+      if (roundEndTimerRef.current) {
+        clearInterval(roundEndTimerRef.current);
+        roundEndTimerRef.current = null;
+      }
+      resetMovementRuntime();
+      setArenaObstacles([]);
+      const next: HostGameSnapshot = {
+        ...createInitialSnapshot(),
+        arenaPlayers: syncArenaPlayers(playersRef.current, []),
+        obstacles: [],
+      };
+      setSnapshot(next);
+      snapshotRef.current = next;
+      if (roomCode) {
+        send({
+          event: 'GAME_STATE',
+          payload: buildGameStatePayload(roomCode, next, playersRef.current),
+        });
+      }
+    },
   };
 }

@@ -11,6 +11,7 @@ coverage/
 .vite/
 supabase/.temp/
 supabase/.branches/
+server/data/
 
 # Unity
 unity/[Ll]ibrary/

@@ -23,7 +23,6 @@ describe('protocol', () => {
       payload: {
         room_code: 'XJ9R',
         nickname: 'Test',
-        character_color: '#FF5733',
       },
     };
     const parsed = parseIncomingMessage(msg, 'player');

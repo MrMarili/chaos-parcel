@@ -48,10 +48,12 @@ describe('E2E: Host + Player flow', () => {
     }));
 
     const created = await waitForMessage(hostWs, 'ROOM_CREATED') as {
-      payload: { room_code: string };
+      payload: { room_code: string; has_pass: boolean; ads_enabled: boolean };
     };
     roomCode = created.payload.room_code;
     expect(roomCode).toHaveLength(4);
+    expect(created.payload.has_pass).toBe(false);
+    expect(created.payload.ads_enabled).toBe(true);
 
     playerWs = new WebSocket(`${WS_URL}?role=player`);
     await new Promise<void>((resolve, reject) => {
@@ -67,7 +69,6 @@ describe('E2E: Host + Player flow', () => {
       payload: {
         room_code: roomCode,
         nickname: 'E2E Player',
-        character_color: '#FF5733',
       },
     }));
 
@@ -120,7 +121,11 @@ describe('E2E: Host + Player flow', () => {
       },
     }));
 
-    const state = await statePromise as { payload: { status: string } };
+    const state = await statePromise as {
+      payload: { status: string; has_pass?: boolean; ads_enabled?: boolean };
+    };
     expect(state.payload.status).toBe('IN_GAME');
+    expect(state.payload.has_pass).toBe(false);
+    expect(state.payload.ads_enabled).toBe(true);
   }, 10000);
 });

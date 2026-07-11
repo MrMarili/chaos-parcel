@@ -1,17 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AbilityType, CooldownState, PackageExplodedPayload } from '@chaos-parcel/shared';
-import { MOVE_THROTTLE_MS } from '@chaos-parcel/shared';
 import { DynamicJoystick } from '../components/DynamicJoystick';
 import { AbilityBar } from '../components/AbilityBar';
 import { PanicOverlay } from '../components/PanicOverlay';
 import { ExplosionOverlay } from '../components/ExplosionOverlay';
+import { useMoveSender } from '../hooks/useMoveSender';
 import { ABILITY_LABELS } from '../config';
 import { ABILITY_DESCRIPTIONS } from '../host/hostGameTypes';
 import { EXPLOSION_DISPLAY_MS } from '../host/hostGameTypes';
+import { warmHaptics } from '../utils/haptics';
 
 interface GamePageProps {
   playerId: string;
   hasPackage: boolean;
+  canPass: boolean;
   round: number;
   timerSeconds?: number;
   cooldowns: CooldownState;
@@ -32,6 +34,7 @@ const ABILITY_COOLDOWNS: Record<AbilityType, number> = {
 export function GamePage({
   playerId,
   hasPackage,
+  canPass,
   round,
   timerSeconds,
   cooldowns: serverCooldowns,
@@ -44,9 +47,18 @@ export function GamePage({
   const [localCooldowns, setLocalCooldowns] = useState<CooldownState>(serverCooldowns);
   const [showHelp, setShowHelp] = useState(false);
   const [visibleExplosion, setVisibleExplosion] = useState<PackageExplodedPayload | null>(null);
-  const lastMoveRef = useRef(0);
-  const moveRef = useRef({ x: 0, y: 0 });
   const explosionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleJoystickChange = useMoveSender(onMove);
+
+  // Prepare iOS Taptic switch on first touch (must exist before panic pulses).
+  useEffect(() => {
+    const warm = () => {
+      warmHaptics();
+      window.removeEventListener('pointerdown', warm);
+    };
+    window.addEventListener('pointerdown', warm, { passive: true });
+    return () => window.removeEventListener('pointerdown', warm);
+  }, []);
 
   useEffect(() => {
     if (!explosion) return;
@@ -82,32 +94,6 @@ export function GamePage({
     return () => clearInterval(interval);
   }, []);
 
-  useEffect(() => {
-    let frameId: number;
-    const loop = () => {
-      const now = performance.now();
-      if (now - lastMoveRef.current >= MOVE_THROTTLE_MS) {
-        const { x, y } = moveRef.current;
-        if (x !== 0 || y !== 0) {
-          onMove(x, y);
-          lastMoveRef.current = now;
-        }
-      }
-      frameId = requestAnimationFrame(loop);
-    };
-    frameId = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(frameId);
-  }, [onMove]);
-
-  const handleJoystickChange = useCallback((value: { x: number; y: number }) => {
-    moveRef.current = value;
-    const now = performance.now();
-    if (now - lastMoveRef.current >= MOVE_THROTTLE_MS) {
-      onMove(value.x, value.y);
-      lastMoveRef.current = now;
-    }
-  }, [onMove]);
-
   const handleAbility = (ability: AbilityType) => {
     onAbility(ability);
     setLocalCooldowns((prev) => ({
@@ -122,7 +108,7 @@ export function GamePage({
         {!hasPackage && (
           <>
             <p className="game-help">
-              יכולות כאוס — השפעה על שחקנים בזירה (בטלוויזיה)
+              יכולות כאוס — השפעה על שחקנים בזירה (במסך הראשי)
             </p>
             <AbilityBar
               cooldowns={localCooldowns}
@@ -157,7 +143,12 @@ export function GamePage({
         <p className="joystick-hint">גע למטה כדי להזיז את הדמות שלך בזירה</p>
       )}
 
-      <PanicOverlay active={hasPackage} onPass={onPass} timerSeconds={timerSeconds} />
+      <PanicOverlay
+        active={hasPackage}
+        canPass={canPass}
+        onPass={onPass}
+        timerSeconds={timerSeconds}
+      />
 
       {visibleExplosion && (
         <ExplosionOverlay

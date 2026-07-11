@@ -1,16 +1,34 @@
-export const WS_URL = import.meta.env.VITE_WS_URL ?? 'ws://localhost:3001/ws';
-export const JOIN_BASE_URL = import.meta.env.VITE_JOIN_BASE_URL ?? 'http://localhost:5173/join';
+/** WebSocket port when the client page is served separately (Vite dev on :5173). */
+const WS_PORT = import.meta.env.VITE_WS_PORT ?? '3001';
 
-export const CHARACTER_COLORS = [
-  '#FF5733',
-  '#33FF57',
-  '#3357FF',
-  '#FF33F5',
-  '#F5FF33',
-  '#33FFF5',
-  '#FF8C33',
-  '#8C33FF',
-] as const;
+/**
+ * Resolves the WebSocket URL for the current environment.
+ * - Production (single server): same host:port as the page
+ * - Dev / LAN: hostname from the browser + WS port (default 3001)
+ */
+export function resolveWsUrl(): string {
+  if (typeof window === 'undefined') {
+    return import.meta.env.VITE_WS_URL ?? `ws://localhost:${WS_PORT}/ws`;
+  }
+
+  const envUrl = import.meta.env.VITE_WS_URL as string | undefined;
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+
+  // Built client served by the game server — WebSocket shares host:port
+  if (import.meta.env.PROD && !import.meta.env.VITE_WS_PORT) {
+    return `${protocol}//${window.location.host}/ws`;
+  }
+
+  // Ignore localhost env when opened from another device on the LAN
+  if (!envUrl || envUrl.includes('localhost') || envUrl.includes('127.0.0.1')) {
+    return `${protocol}//${window.location.hostname}:${WS_PORT}/ws`;
+  }
+
+  return envUrl;
+}
+
+export const JOIN_BASE_URL =
+  import.meta.env.VITE_JOIN_BASE_URL ?? 'http://localhost:5173/join';
 
 export const ABILITY_LABELS = {
   FREEZE: 'הקפאה',

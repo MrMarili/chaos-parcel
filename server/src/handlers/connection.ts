@@ -2,7 +2,9 @@ import type { IncomingClientMessage } from '@chaos-parcel/shared';
 import type { WebSocket } from 'ws';
 import type { RoomManager } from '../roomManager.js';
 import type { ClientMeta } from '../types.js';
+import { playerToInfo } from '../types.js';
 import { validateIncomingMessage } from '../validate.js';
+import { upsertDeviceProfile } from '../deviceProfileStore.js';
 
 export function handleConnectionMessage(
   roomManager: RoomManager,
@@ -20,6 +22,11 @@ export function handleConnectionMessage(
 
     if (message.event === 'PLAYER_JOIN') {
       handlePlayerJoin(roomManager, socket, meta, message);
+      return;
+    }
+
+    if (message.event === 'PLAYER_REJOIN') {
+      handlePlayerRejoin(roomManager, socket, meta, message);
       return;
     }
 
@@ -41,8 +48,16 @@ function handlePlayerJoin(
   meta: ClientMeta,
   message: Extract<ReturnType<typeof validateIncomingMessage>, { event: 'PLAYER_JOIN' }>,
 ): void {
-  const { room_code, nickname, character_color, avatar } = message.payload;
-  const result = roomManager.joinPlayer(socket, room_code, nickname, character_color, avatar);
+  const { room_code, nickname, avatar, cosmetics, character_color, device_id } =
+    message.payload;
+  const result = roomManager.joinPlayer(
+    socket,
+    room_code,
+    nickname,
+    avatar,
+    cosmetics,
+    character_color,
+  );
 
   if ('error' in result) {
     const errorMessages: Record<string, string> = {
@@ -61,6 +76,59 @@ function handlePlayerJoin(
   meta.role = 'player';
   meta.roomCode = room_code.toUpperCase();
   meta.playerId = result.playerId;
+  meta.disconnectHandled = false;
+
+  if (device_id) {
+    const room = roomManager.getRoom(room_code);
+    const player = room?.players.get(result.playerId);
+    upsertDeviceProfile(device_id, {
+      nickname,
+      updatedAt: Date.now(),
+      ...(player?.characterColor ? { characterColor: player.characterColor } : {}),
+      ...(avatar ? { avatar } : {}),
+      ...(cosmetics?.length ? { cosmetics } : {}),
+    });
+  }
+}
+
+function handlePlayerRejoin(
+  roomManager: RoomManager,
+  socket: WebSocket,
+  meta: ClientMeta,
+  message: Extract<ReturnType<typeof validateIncomingMessage>, { event: 'PLAYER_REJOIN' }>,
+): void {
+  const { room_code, player_id } = message.payload;
+  const result = roomManager.rejoinPlayer(socket, room_code, player_id);
+
+  if ('error' in result) {
+    const errorMessages: Record<string, string> = {
+      ROOM_NOT_FOUND: 'החדר כבר לא פעיל. סרוק שוב את ה-QR.',
+      ROOM_FINISHED: 'המשחק הזה כבר הסתיים.',
+      PLAYER_NOT_FOUND: 'המושב שלך בחדר פג. הצטרף מחדש.',
+      REJOIN_EXPIRED: 'עבר יותר מדי זמן — הצטרף מחדש לחדר.',
+    };
+    roomManager.sendError(
+      socket,
+      result.error,
+      errorMessages[result.error] ?? 'Unable to rejoin room.',
+    );
+    return;
+  }
+
+  meta.role = 'player';
+  meta.roomCode = room_code.toUpperCase();
+  meta.playerId = result.playerId;
+  meta.disconnectHandled = false;
+
+  const player = result.room.players.get(result.playerId)!;
+  roomManager.broadcastToRoom(result.room, {
+    event: 'PLAYER_JOINED',
+    payload: {
+      room_code: result.room.roomCode,
+      player: playerToInfo(player),
+      players: roomManager.buildPlayerList(result.room),
+    },
+  });
 }
 
 export function handleHostRoomCreate(
@@ -69,15 +137,25 @@ export function handleHostRoomCreate(
   meta: ClientMeta,
   hostVersion: string,
   joinBaseUrl: string,
+  options?: { hasPass?: boolean },
 ): string {
-  const roomCode = roomManager.createRoom(socket, hostVersion);
+  const roomCode = roomManager.createRoom(socket, hostVersion, {
+    hasPass: options?.hasPass === true,
+  });
   meta.role = 'host';
   meta.roomCode = roomCode;
+  meta.disconnectHandled = false;
 
+  const room = roomManager.getRoom(roomCode)!;
   const joinUrl = `${joinBaseUrl.replace(/\/$/, '')}/${roomCode}`;
   roomManager.send(socket, {
     event: 'ROOM_CREATED',
-    payload: { room_code: roomCode, join_url: joinUrl },
+    payload: {
+      room_code: roomCode,
+      join_url: joinUrl,
+      has_pass: room.hasPass,
+      ads_enabled: room.adsEnabled,
+    },
   });
 
   return roomCode;
@@ -86,7 +164,11 @@ export function handleHostRoomCreate(
 export function handleDisconnect(
   roomManager: RoomManager,
   meta: ClientMeta,
+  socket: WebSocket,
 ): void {
+  if (meta.disconnectHandled) return;
+  meta.disconnectHandled = true;
+
   if (!meta.roomCode) return;
 
   if (meta.role === 'host') {
@@ -95,16 +177,8 @@ export function handleDisconnect(
   }
 
   if (meta.playerId) {
-    const room = roomManager.removePlayer(meta.roomCode, meta.playerId);
-    if (room && room.players.size >= 0) {
-      roomManager.broadcastToRoom(room, {
-        event: 'PLAYER_LEFT',
-        payload: {
-          room_code: meta.roomCode,
-          player_id: meta.playerId,
-          players: roomManager.buildPlayerList(room),
-        },
-      });
-    }
+    // Soft leave — seat stays until grace expires or player rejoins.
+    // Pass the closing socket so a delayed close after rejoin is ignored.
+    roomManager.markPlayerDisconnected(meta.roomCode, meta.playerId, socket);
   }
 }
