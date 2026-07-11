@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { WebSocket } from 'ws';
+import { PLAYER_DISCONNECT_GRACE_MS } from '@chaos-parcel/shared';
 import { RoomManager } from './roomManager.js';
 
 function createMockSocket(): WebSocket {
@@ -113,7 +114,7 @@ describe('RoomManager', () => {
     if ('error' in join) throw new Error(join.error);
 
     manager.markPlayerDisconnected(code, join.playerId, playerSocket);
-    vi.advanceTimersByTime(45_000);
+    vi.advanceTimersByTime(PLAYER_DISCONNECT_GRACE_MS);
     expect(manager.getRoom(code)!.players.has(join.playerId)).toBe(false);
     expect(host.send).toHaveBeenCalled();
 

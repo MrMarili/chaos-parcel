@@ -1584,8 +1584,39 @@ h1, h2, h3 {
   width: 100%;
   height: 100%;
   pointer-events: none;
-  z-index: 1;
+  /* Above ability rings so the wave cannot visually cross walls. */
+  z-index: 4;
   overflow: visible;
+}
+
+.host-ability-wave-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.host-ability-wave-path,
+.host-ability-wave-glow {
+  fill: none;
+  stroke: var(--wave-color, #fff);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.host-ability-wave-glow {
+  stroke-width: 5px;
+  stroke-opacity: 0.35;
+  filter: blur(1.5px);
+}
+
+.host-ability-wave-path {
+  stroke-width: 2px;
+  stroke-opacity: 0.95;
 }
 
 .host-arena-parcel {
@@ -1600,7 +1631,7 @@ h1, h2, h3 {
 
 .host-arena-player {
   position: absolute;
-  z-index: 2;
+  z-index: 5;
   width: 52px;
   height: 52px;
   border-radius: 50%;

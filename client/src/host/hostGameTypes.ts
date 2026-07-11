@@ -117,10 +117,10 @@ export const PACKAGE_MOVE_MULTIPLIER = 1.22;
 export const MIN_PLAYERS = 2;
 
 export const ABILITY_DESCRIPTIONS: Record<AbilityType, string> = {
-  FREEZE: 'מקפיא שחקן ל-2 שניות',
-  SHOCKWAVE: 'דוחף את כולם הרחק ממך',
-  MAGNET: 'מושך אותך לכיוון מחזיק החבילה',
-  CONFUSION: 'הופך את כיוון התנועה של יריב',
+  FREEZE: 'גל הקפאה ל-5 שנ׳ — מקפיא מי שנכנס לעיגול',
+  SHOCKWAVE: 'גל הדף ל-5 שנ׳ — דוחף החוצה את כל מי שבתוך העיגול',
+  MAGNET: 'גל מגנט ל-5 שנ׳ — מושך אלייך מי שנכנס לעיגול',
+  CONFUSION: 'גל בלבול ל-5 שנ׳ — מבלבל מי שנכנס לעיגול',
 };
 
 /**

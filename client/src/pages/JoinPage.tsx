@@ -30,13 +30,17 @@ interface JoinPageProps {
   connected: boolean;
   error: string | null;
   onJoin: (payload: JoinPayload) => void;
+  onBackToLobby?: () => void;
 }
+
+const ROOM_INACTIVE_HINT = 'החדר כבר לא פעיל';
 
 export function JoinPage({
   roomCode,
   connected,
   error,
   onJoin,
+  onBackToLobby,
 }: JoinPageProps) {
   const deviceId = useRef(getOrCreateDeviceId()).current;
   const [profileReady, setProfileReady] = useState(false);
@@ -80,6 +84,7 @@ export function JoinPage({
   }, [deviceId]);
 
   const canJoin = nickname.trim().length > 0 && connected && !processing;
+  const roomInactive = Boolean(error?.includes(ROOM_INACTIVE_HINT));
 
   const submit = (payload: {
     nickname: string;
@@ -144,30 +149,44 @@ export function JoinPage({
           </div>
 
           {error && <p className="error-text">{error}</p>}
-          {!connected && <p className="status-text">מתחבר לשרת...</p>}
+          {!connected && !roomInactive && (
+            <p className="status-text">מתחבר לשרת...</p>
+          )}
 
-          <button
-            type="button"
-            className="btn-primary join-submit-btn"
-            disabled={!connected}
-            onClick={() =>
-              submit({
-                nickname: returning.nickname,
-                avatar: returning.avatar,
-                cosmetics: returning.cosmetics ?? cosmetics,
-                characterColor: returning.characterColor,
-              })
-            }
-          >
-            המשך עם הפרטים האלה
-          </button>
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => setEditing(true)}
-          >
-            שנה פרטים
-          </button>
+          {roomInactive ? (
+            <button
+              type="button"
+              className="btn-primary join-submit-btn"
+              onClick={() => onBackToLobby?.()}
+            >
+              חזרה ללובי
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="btn-primary join-submit-btn"
+                disabled={!connected}
+                onClick={() =>
+                  submit({
+                    nickname: returning.nickname,
+                    avatar: returning.avatar,
+                    cosmetics: returning.cosmetics ?? cosmetics,
+                    characterColor: returning.characterColor,
+                  })
+                }
+              >
+                המשך עם הפרטים האלה
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setEditing(true)}
+              >
+                שנה פרטים
+              </button>
+            </>
+          )}
         </div>
 
         <AdSlot slot="phone_join" variant="banner" className="join-ad" />

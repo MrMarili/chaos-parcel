@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import type { AbilityType } from '@chaos-parcel/shared';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useGameState } from './hooks/useGameState';
@@ -25,6 +25,7 @@ export default function App() {
   useEffect(() => {
     document.title = PLAYER_DOCUMENT_TITLE;
   }, []);
+  const navigate = useNavigate();
   const { roomCode: roomCodeParam } = useParams<{ roomCode: string }>();
   const roomCode = (roomCodeParam ?? '').toUpperCase();
   const joinIdentityRef = useRef<{
@@ -74,7 +75,7 @@ export default function App() {
     if (!playerId) return false;
 
     rejoiningRef.current = true;
-    setReconnecting(true);
+    joinedPlayerIdRef.current = playerId;
     if (session) {
       joinIdentityRef.current = {
         nickname: session.nickname,
@@ -87,7 +88,7 @@ export default function App() {
     rejoinTimeoutRef.current = setTimeout(() => {
       rejoiningRef.current = false;
       rejoinTimeoutRef.current = null;
-    }, 10_000);
+    }, 8_000);
 
     const sent = sendRef.current({
       event: 'PLAYER_REJOIN',
@@ -122,6 +123,7 @@ export default function App() {
       if (message.event === 'HOST_DISCONNECTED') {
         clearPlayerSession(roomCode);
         setJoinedPlayerId(null);
+        joinedPlayerIdRef.current = null;
         joinIdentityRef.current = null;
         clearRejoinAttempt();
         setReconnecting(false);
@@ -130,9 +132,18 @@ export default function App() {
       if (message.event === 'PLAYER_JOINED') {
         const session = loadPlayerSession(roomCode);
         const identity = joinIdentityRef.current;
+        const myId =
+          joinedPlayerIdRef.current ??
+          session?.playerId ??
+          playerIdRef.current ??
+          null;
         const self =
-          message.payload.players.find((p) => p.player_id === joinedPlayerId) ??
-          message.payload.players.find((p) => p.player_id === session?.playerId) ??
+          (myId
+            ? message.payload.players.find((p) => p.player_id === myId)
+            : undefined) ??
+          (myId && message.payload.player.player_id === myId
+            ? message.payload.player
+            : undefined) ??
           (identity
             ? message.payload.player.nickname === identity.nickname
               ? message.payload.player
@@ -140,6 +151,7 @@ export default function App() {
             : undefined);
 
         if (self) {
+          joinedPlayerIdRef.current = self.player_id;
           setJoinedPlayerId(self.player_id);
           savePlayerSession({
             roomCode,
@@ -153,7 +165,6 @@ export default function App() {
             ...(self.avatar ? { avatar: self.avatar } : {}),
           };
 
-          // Remember last successful join for the next party (device profile).
           const deviceId = identity?.deviceId;
           if (deviceId) {
             const saved = saveLocalDeviceProfile({
@@ -172,17 +183,32 @@ export default function App() {
         }
       }
 
+      // Receiving live game traffic means the seat is active again.
+      if (
+        (message.event === 'GAME_STATE' ||
+          message.event === 'ROUND_END' ||
+          message.event === 'PACKAGE_EXPLODED') &&
+        (joinedPlayerIdRef.current || loadPlayerSession(roomCode))
+      ) {
+        setReconnecting(false);
+        clearRejoinAttempt();
+      }
+
       if (
         message.event === 'PLAYER_LEFT' &&
-        message.payload.player_id === (joinedPlayerId ?? loadPlayerSession(roomCode)?.playerId)
+        message.payload.player_id ===
+          (joinedPlayerIdRef.current ?? loadPlayerSession(roomCode)?.playerId)
       ) {
         loseSession('נותקת מהחדר. הצטרף מחדש.');
         return;
       }
 
-      handleMessage(message, joinedPlayerId ?? state.playerId ?? undefined);
+      handleMessage(
+        message,
+        joinedPlayerIdRef.current ?? state.playerId ?? undefined,
+      );
     },
-    [handleMessage, joinedPlayerId, state.playerId, roomCode, loseSession, clearRejoinAttempt],
+    [handleMessage, state.playerId, roomCode, loseSession, clearRejoinAttempt],
   );
 
   const { connected, error: wsError, send, clearError } = useWebSocket({
@@ -192,7 +218,6 @@ export default function App() {
       tryRejoin();
     },
     onClose: () => {
-      // Unlock rejoin so the next successful open can send PLAYER_REJOIN again.
       clearRejoinAttempt();
       if (loadPlayerSession(roomCode) || joinedPlayerIdRef.current || playerIdRef.current) {
         setReconnecting(true);
@@ -202,7 +227,7 @@ export default function App() {
 
   sendRef.current = send;
 
-  // After reload with a saved session, rejoin once the socket is up.
+  // After reload / first open: rejoin once the socket is up.
   useEffect(() => {
     if (!connected || !roomCode) return;
     if (!loadPlayerSession(roomCode) && !joinedPlayerIdRef.current && !playerIdRef.current) {
@@ -210,6 +235,17 @@ export default function App() {
     }
     tryRejoin();
   }, [connected, roomCode, tryRejoin]);
+
+  // While the reconnect banner is up, keep retrying until the seat is restored.
+  useEffect(() => {
+    if (!connected || !reconnecting || !roomCode) return;
+    const retry = setInterval(() => {
+      if (!rejoiningRef.current) {
+        tryRejoin();
+      }
+    }, 2500);
+    return () => clearInterval(retry);
+  }, [connected, reconnecting, roomCode, tryRejoin]);
 
   useEffect(() => {
     return () => {
@@ -240,6 +276,16 @@ export default function App() {
       },
     });
   };
+
+  const handleBackToLobby = useCallback(() => {
+    clearError();
+    clearPlayerSession(roomCode);
+    setJoinedPlayerId(null);
+    clearRejoinAttempt();
+    setReconnecting(false);
+    joinIdentityRef.current = null;
+    navigate('/host', { replace: true });
+  }, [clearError, clearRejoinAttempt, navigate, roomCode]);
 
   const handleMove = useCallback(
     (x: number, y: number) => {
@@ -305,6 +351,7 @@ export default function App() {
           connected={connected}
           error={displayError}
           onJoin={handleJoin}
+          onBackToLobby={handleBackToLobby}
         />
       )}
 

@@ -10,7 +10,8 @@ interface UseWebSocketOptions {
   onClose?: () => void;
 }
 
-const RECONNECT_MS = 1500;
+const RECONNECT_MS = 1200;
+const RECONNECT_MAX_MS = 5000;
 
 export function useWebSocket({ role = 'player', onMessage, onOpen, onClose }: UseWebSocketOptions) {
   const [connected, setConnected] = useState(false);
@@ -21,6 +22,7 @@ export function useWebSocket({ role = 'player', onMessage, onOpen, onClose }: Us
   const onCloseRef = useRef(onClose);
   const unmountedRef = useRef(false);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptRef = useRef(0);
 
   onMessageRef.current = onMessage;
   onOpenRef.current = onOpen;
@@ -49,6 +51,7 @@ export function useWebSocket({ role = 'player', onMessage, onOpen, onClose }: Us
 
     ws.onopen = () => {
       if (unmountedRef.current) return;
+      reconnectAttemptRef.current = 0;
       setConnected(true);
       setError(null);
       onOpenRef.current?.();
@@ -75,7 +78,13 @@ export function useWebSocket({ role = 'player', onMessage, onOpen, onClose }: Us
 
       if (!unmountedRef.current) {
         clearReconnectTimer();
-        reconnectTimerRef.current = setTimeout(() => connect(), RECONNECT_MS);
+        const attempt = reconnectAttemptRef.current;
+        reconnectAttemptRef.current = attempt + 1;
+        const delay = Math.min(
+          RECONNECT_MAX_MS,
+          RECONNECT_MS * Math.pow(1.4, Math.min(attempt, 6)),
+        );
+        reconnectTimerRef.current = setTimeout(() => connect(), delay);
       }
     };
 
@@ -105,14 +114,21 @@ export function useWebSocket({ role = 'player', onMessage, onOpen, onClose }: Us
       if (document.visibilityState !== 'visible' || unmountedRef.current) return;
       const ws = wsRef.current;
       if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+        reconnectAttemptRef.current = 0;
         connect();
+      } else if (ws.readyState === WebSocket.OPEN) {
+        // Nudge the app layer: parent onOpen/rejoin runs only on new sockets.
+        // If the socket survived backgrounding, still refresh the seat.
+        onOpenRef.current?.();
       }
     };
     document.addEventListener('visibilitychange', onVisible);
     window.addEventListener('pageshow', onVisible);
+    window.addEventListener('online', onVisible);
     return () => {
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('pageshow', onVisible);
+      window.removeEventListener('online', onVisible);
     };
   }, [connect]);
 

@@ -113,6 +113,13 @@ wss.on('connection', (socket, request) => {
   const meta: ClientMeta = { role };
   connectionMeta.set(socket, meta);
 
+  // Keepalive through mobile NATs / proxies (browser answers with pong automatically).
+  const pingInterval = setInterval(() => {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.ping();
+    }
+  }, 25_000);
+
   socket.on('message', (data) => {
     const raw = data.toString();
 
@@ -143,14 +150,14 @@ wss.on('connection', (socket, request) => {
     handleConnectionMessage(roomManager, socket, meta, raw);
   });
 
-  socket.on('close', () => {
+  const cleanup = () => {
+    clearInterval(pingInterval);
     handleDisconnect(roomManager, meta, socket);
     connectionMeta.delete(socket);
-  });
+  };
 
-  socket.on('error', () => {
-    handleDisconnect(roomManager, meta, socket);
-  });
+  socket.on('close', cleanup);
+  socket.on('error', cleanup);
 });
 
 server.listen(PORT, HOST, () => {

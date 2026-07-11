@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AbilityType, CooldownState, PackageExplodedPayload } from '@chaos-parcel/shared';
+import { ABILITY_WAVE_MS } from '@chaos-parcel/shared';
 import { DynamicJoystick } from '../components/DynamicJoystick';
 import { AbilityBar } from '../components/AbilityBar';
 import { PanicOverlay } from '../components/PanicOverlay';
@@ -24,12 +25,8 @@ interface GamePageProps {
   onPass: () => void;
 }
 
-const ABILITY_COOLDOWNS: Record<AbilityType, number> = {
-  FREEZE: 12,
-  SHOCKWAVE: 8,
-  MAGNET: 15,
-  CONFUSION: 10,
-};
+/** Matches arena wave length — phone countdown = ring lifetime. */
+const ABILITY_ACTIVE_SEC = ABILITY_WAVE_MS / 1000;
 
 export function GamePage({
   playerId,
@@ -37,14 +34,19 @@ export function GamePage({
   canPass,
   round,
   timerSeconds,
-  cooldowns: serverCooldowns,
+  cooldowns: _serverCooldowns,
   explosion,
   onExplosionDone,
   onMove,
   onAbility,
   onPass,
 }: GamePageProps) {
-  const [localCooldowns, setLocalCooldowns] = useState<CooldownState>(serverCooldowns);
+  const [localCooldowns, setLocalCooldowns] = useState<CooldownState>({
+    FREEZE: 0,
+    SHOCKWAVE: 0,
+    MAGNET: 0,
+    CONFUSION: 0,
+  });
   const [showHelp, setShowHelp] = useState(false);
   const [visibleExplosion, setVisibleExplosion] = useState<PackageExplodedPayload | null>(null);
   const explosionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -73,9 +75,8 @@ export function GamePage({
     };
   }, [explosion, onExplosionDone]);
 
-  useEffect(() => {
-    setLocalCooldowns((prev) => ({ ...prev, ...serverCooldowns }));
-  }, [serverCooldowns]);
+  // Local-only timers (arena wave length). Do not merge server cooldowns —
+  // GAME_STATE would overwrite and break "one ability at a time" resets.
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -96,10 +97,14 @@ export function GamePage({
 
   const handleAbility = (ability: AbilityType) => {
     onAbility(ability);
-    setLocalCooldowns((prev) => ({
-      ...prev,
-      [ability]: ABILITY_COOLDOWNS[ability],
-    }));
+    // Replace previous ability timer — only one wave runs at a time.
+    setLocalCooldowns({
+      FREEZE: 0,
+      SHOCKWAVE: 0,
+      MAGNET: 0,
+      CONFUSION: 0,
+      [ability]: ABILITY_ACTIVE_SEC,
+    });
   };
 
   return (

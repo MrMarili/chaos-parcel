@@ -25,16 +25,14 @@ import {
 } from './hostGameTypes';
 import { placeRosterSpread, syncArenaPlayers } from './playerSpawn';
 import {
-  canSeePlayer,
   clearAllVelocities,
-  confusePlayer,
+  drainAbilityHits,
   freezePlayer,
-  applyShockwave,
-  magnetizePlayer,
   readPositionsInto,
   resetMovementRuntime,
   setArenaObstacles,
   setPlayerVelocity,
+  startAbilityWave,
   syncMovementPlayers,
   tickMovement,
 } from './movementRuntime';
@@ -554,16 +552,30 @@ export function useWebHostGame(
         PACKAGE_MOVE_MULTIPLIER,
       );
 
+      const abilityHits = drainAbilityHits();
+      if (abilityHits.length > 0) {
+        const abilitiesReceived = { ...snapshotRef.current.abilitiesReceived };
+        for (const victimId of abilityHits) {
+          abilitiesReceived[victimId] = (abilitiesReceived[victimId] ?? 0) + 1;
+        }
+        snapshotRef.current = { ...snapshotRef.current, abilitiesReceived };
+      }
+
       // Keep logical positions fresh for pass / nearest-player without re-rendering.
-      const syncedPlayers = readPositionsInto(current.arenaPlayers);
-      snapshotRef.current = { ...current, arenaPlayers: syncedPlayers };
+      const syncedPlayers = readPositionsInto(snapshotRef.current.arenaPlayers);
+      snapshotRef.current = { ...snapshotRef.current, arenaPlayers: syncedPlayers };
 
       // Occasional React sync so HUD / lists stay consistent (not every frame).
       if (now - lastReactSyncRef.current > 100) {
         lastReactSyncRef.current = now;
         setSnapshot((prev) => {
           if (prev.phase !== 'playing' && prev.phase !== 'lobby') return prev;
-          return { ...prev, arenaPlayers: readPositionsInto(prev.arenaPlayers) };
+          const hits = snapshotRef.current.abilitiesReceived;
+          return {
+            ...prev,
+            arenaPlayers: readPositionsInto(prev.arenaPlayers),
+            abilitiesReceived: hits,
+          };
         });
       }
 
@@ -575,7 +587,7 @@ export function useWebHostGame(
   }, [snapshot.phase]);
 
   const handleAbility = useCallback(
-    (playerId: string, ability: AbilityType, targetId?: string) => {
+    (playerId: string, ability: AbilityType, _targetId?: string) => {
       const current = snapshotRef.current;
       if (current.phase !== 'playing') return;
 
@@ -583,66 +595,16 @@ export function useWebHostGame(
       const caster = arenaPlayers.find((p) => p.playerId === playerId);
       if (!caster) return;
 
-      const others = arenaPlayers.filter((p) => p.playerId !== playerId);
-      const needsRival = ability === 'FREEZE' || ability === 'CONFUSION';
-
-      let victimId = targetId;
-      if (needsRival) {
-        const visibleOthers = others.filter((p) => canSeePlayer(caster, p));
-        const requested =
-          targetId != null
-            ? arenaPlayers.find((p) => p.playerId === targetId && p.playerId !== playerId)
-            : null;
-        const rival =
-          (requested && canSeePlayer(caster, requested) ? requested : null) ??
-          findNearestPlayer(caster, visibleOthers, 2) ??
-          null;
-        if (!rival) {
-          pushLog(
-            'info',
-            visibleOthers.length === 0 && others.length > 0
-              ? 'אין קו ראייה ליריב — המכשול חוסם'
-              : 'אין יריב להפעיל עליו את היכולת',
-          );
-          return;
-        }
-        victimId = rival.playerId;
-      } else {
-        // SHOCKWAVE / MAGNET act from / on the caster (shockwave filters LoS internally).
-        victimId = playerId;
-      }
-
-      const victim = arenaPlayers.find((p) => p.playerId === victimId) ?? caster;
-
-      switch (ability) {
-        case 'FREEZE':
-          freezePlayer(victimId);
-          break;
-        case 'SHOCKWAVE':
-          applyShockwave(playerId);
-          break;
-        case 'MAGNET':
-          magnetizePlayer(playerId);
-          break;
-        case 'CONFUSION':
-          confusePlayer(victimId);
-          break;
-      }
+      startAbilityWave(playerId, ability);
 
       pushLog(
         'ability',
-        needsRival
-          ? `${ltrName(displayName(caster.nickname))} הפעיל ${ABILITY_LABELS[ability]} על ${ltrName(displayName(victim.nickname))}`
-          : `${ltrName(displayName(caster.nickname))} הפעיל ${ABILITY_LABELS[ability]}`,
+        `${ltrName(displayName(caster.nickname))} הפעיל ${ABILITY_LABELS[ability]}`,
       );
 
       setSnapshot((prev) => ({
         ...prev,
         arenaPlayers: readPositionsInto(prev.arenaPlayers),
-        abilitiesReceived: {
-          ...prev.abilitiesReceived,
-          [victimId]: (prev.abilitiesReceived[victimId] ?? 0) + 1,
-        },
       }));
     },
     [pushLog],
@@ -802,6 +764,9 @@ export function useWebHostGame(
             nickname: holderName,
             startedAt: explosionStartedAt,
           };
+
+          // Lock exploded player in place until boom animation ends.
+          freezePlayer(explodedId, EXPLOSION_DISPLAY_MS);
 
           activityLog = [
             makeLog(
