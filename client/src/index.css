@@ -988,8 +988,8 @@ h1, h2, h3 {
   flex: 1;
   min-height: 0;
   display: grid;
-  /* RTL: first column sits on the visual right (QR + players). */
-  grid-template-columns: minmax(200px, 280px) minmax(0, 1fr);
+  /* RTL: first column = QR + players; width follows the join URL (max-content). */
+  grid-template-columns: max-content minmax(0, 1fr);
   /* How-to/QR hug content; arena + players fill the rest (no page scroll). */
   grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas:
@@ -1007,11 +1007,13 @@ h1, h2, h3 {
   grid-area: room;
   align-self: stretch;
   text-align: center;
-  min-width: 0;
+  /* Size to the full join URL; players column matches via shared grid track. */
+  width: max-content;
+  min-width: 12.5rem;
   min-height: 0;
   height: auto;
-  overflow: hidden;
-  padding: 0.45rem 0.55rem;
+  overflow: visible;
+  padding: 0.45rem 0.65rem;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1223,14 +1225,22 @@ h1, h2, h3 {
   display: flex;
   gap: 0.5rem;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: center;
+  width: max-content;
+  max-width: none;
 }
 
 .host-url {
   color: var(--amber);
   font-size: 0.8rem;
-  word-break: break-all;
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+.host-lobby .host-url {
+  font-size: clamp(0.72rem, 1.05vw, 0.82rem);
 }
 
 /* In-game host: clean arena + side rail (no overlays on the play field) */
