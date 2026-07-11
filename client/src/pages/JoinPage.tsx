@@ -4,7 +4,6 @@ import { BrandMark } from '../components/BrandMark';
 import { GameHowTo } from '../components/GameHowTo';
 import { warmHaptics } from '../utils/haptics';
 import { AdSlot } from '../components/AdSlot';
-import { CosmeticPicker } from '../components/CosmeticPicker';
 import { PlayerAvatar } from '../components/PlayerAvatar';
 import {
   loadEquippedCosmetics,
@@ -253,15 +252,6 @@ export function JoinPage({
           accept="image/*"
           hidden
           onChange={(e) => handleFile(e.target.files?.[0])}
-        />
-      </div>
-
-      <div className="card">
-        <CosmeticPicker
-          onChange={(next) => {
-            setCosmetics(next);
-            saveEquippedCosmetics(next);
-          }}
         />
       </div>
 
