@@ -1,0 +1,26 @@
+# Render Blueprint — Free Web Service (HTTPS + WebSocket)
+# https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: chaos-parcel
+    runtime: docker
+    plan: free
+    region: frankfurt
+    healthCheckPath: /health
+    dockerContext: .
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SERVE_CLIENT
+        value: "true"
+      - key: HOST
+        value: "0.0.0.0"
+      # CORS / join URLs are derived from RENDER_EXTERNAL_URL at runtime.
+      # Optional override after first deploy if you add a custom domain:
+      # - key: PUBLIC_BASE_URL
+      #   value: https://your-custom-domain.example
+      # - key: CORS_ORIGIN
+      #   value: https://your-custom-domain.example
+      # - key: JOIN_BASE_URL
+      #   value: https://your-custom-domain.example/join

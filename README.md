@@ -39,6 +39,41 @@ pnpm test         # unit tests
 - אם ה-IP לא מזוהה: `LAN_IP=192.168.1.5 pnpm party:prod`
 - ודא ש-Firewall במחשב מאפשר חיבורים נכנסים לפורט 3001
 
+## פריסה לאינטרנט (Render Free)
+
+שרת חינמי עם HTTPS + WebSocket — טלפונים מכל רשת (לא חייבים אותו Wi‑Fi).
+
+### פריסה ראשונה
+
+1. דחפו את הריפו ל-GitHub
+2. ב-[Render Dashboard](https://dashboard.render.com) → **New** → **Blueprint** → בחרו את הריפו (`render.yaml`)
+3. ודאו שהשירות הוא **Free** Web Service
+4. אחרי ה-deploy: הכתובת תהיה בערך `https://chaos-parcel.onrender.com`
+
+או ידנית: **New Web Service** → Docker → Dockerfile מהשורש → Plan: Free.
+
+### איך משחקים אחרי פריסה
+
+1. טלוויזיה/מחשב: `https://YOUR-APP.onrender.com/host`
+2. סרקו את ה-QR מהטלפון → `https://YOUR-APP.onrender.com/join/XXXX`
+3. לא צריך אותה רשת Wi‑Fi
+
+### Cold start (חשוב)
+
+במסלול Free השרת **נרדם אחרי ~15 דקות** בלי תעבורה. פתיחה ראשונה אחרי שינה לוקחת **~30–60 שניות**.
+
+**טיפ:** פתחו `/host` דקה לפני שהאורחים סורקים QR. בזמן משחק פעיל (WebSocket) השרת נשאר ער.
+
+אל תפעילו `PARTY_MODE` בפריסה ציבורית — CORS נגזר מ-`RENDER_EXTERNAL_URL` אוטומטית.
+
+### קבצי פריסה
+
+| קובץ | תפקיד |
+|------|--------|
+| `Dockerfile` | build monorepo + הרצה עם `SERVE_CLIENT=true` |
+| `render.yaml` | Blueprint — Free Web Service |
+| `server/.env.example` | משתני סביבה (אופציונלי לדרוס CORS/דומיין) |
+
 ## Monetization (ads placeholders)
 
 - **ליבה חינמית** — משחק מלא בלי תשלום

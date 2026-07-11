@@ -25,11 +25,25 @@ const HOST = process.env.HOST ?? '0.0.0.0';
 const WS_PATH = process.env.WS_PATH ?? '/ws';
 const PARTY_MODE = process.env.PARTY_MODE === 'true';
 const SERVE_CLIENT = process.env.SERVE_CLIENT === 'true';
-const JOIN_BASE_URL = process.env.JOIN_BASE_URL ?? 'http://localhost:5173/join';
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+
+/** Public site URL (Render sets RENDER_EXTERNAL_URL automatically). */
+const PUBLIC_BASE_URL = (
+  process.env.PUBLIC_BASE_URL ??
+  process.env.RENDER_EXTERNAL_URL ??
+  ''
+).replace(/\/$/, '');
+
+const JOIN_BASE_URL =
+  process.env.JOIN_BASE_URL ??
+  (PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}/join` : 'http://localhost:5173/join');
 
 const CLIENT_DIST = path.resolve(__dirname, '../../client/dist');
 
-const configuredOrigins = (process.env.CORS_ORIGIN ?? 'http://localhost:5173')
+const configuredOrigins = (
+  process.env.CORS_ORIGIN ??
+  (PUBLIC_BASE_URL || 'http://localhost:5173')
+)
   .split(',')
   .map((o) => o.trim())
   .filter(Boolean);
@@ -39,7 +53,10 @@ const LAN_ORIGIN =
 
 function isAllowedOrigin(origin: string | undefined): boolean {
   if (!origin) return true;
+  if (configuredOrigins.includes('*')) return true;
   if (configuredOrigins.includes(origin)) return true;
+  if (PUBLIC_BASE_URL && origin === PUBLIC_BASE_URL) return true;
+  // LAN party only — do not set PARTY_MODE on public internet deploys
   if (PARTY_MODE && LAN_ORIGIN.test(origin)) return true;
   return false;
 }
@@ -139,12 +156,25 @@ wss.on('connection', (socket, request) => {
 server.listen(PORT, HOST, () => {
   const bind = HOST === '0.0.0.0' ? 'all interfaces' : HOST;
   console.log(`Chaos Parcel server listening on http://${bind}:${PORT}`);
-  console.log(`WebSocket endpoint: ws://<your-lan-ip>:${PORT}${WS_PATH}`);
-  if (SERVE_CLIENT) {
-    console.log(`Client UI: http://<your-lan-ip>:${PORT}/host`);
+  if (PUBLIC_BASE_URL) {
+    const wsPublic = PUBLIC_BASE_URL.replace(/^http/, 'ws');
+    console.log(`Public URL: ${PUBLIC_BASE_URL}`);
+    console.log(`Host UI: ${PUBLIC_BASE_URL}/host`);
+    console.log(`WebSocket: ${wsPublic}${WS_PATH}`);
+  } else {
+    console.log(`WebSocket endpoint: ws://<your-lan-ip>:${PORT}${WS_PATH}`);
+    if (SERVE_CLIENT) {
+      console.log(`Client UI: http://<your-lan-ip>:${PORT}/host`);
+    }
   }
   if (PARTY_MODE) {
-    console.log('Party mode: LAN origins allowed for CORS');
+    if (IS_PRODUCTION && PUBLIC_BASE_URL) {
+      console.warn(
+        'WARNING: PARTY_MODE is on with a public URL — disable it for internet deploys',
+      );
+    } else {
+      console.log('Party mode: LAN origins allowed for CORS');
+    }
   }
 });
 
