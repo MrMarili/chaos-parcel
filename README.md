@@ -50,6 +50,8 @@ pnpm test         # unit tests
 3. ודאו שהשירות הוא **Free** Web Service
 4. אחרי ה-deploy: הכתובת תהיה בערך `https://chaos-parcel.onrender.com`
 
+**פריסה חיה כרגע:** [https://chaos-parcel.onrender.com/host](https://chaos-parcel.onrender.com/host)
+
 או ידנית: **New Web Service** → Docker → Dockerfile מהשורש → Plan: Free.
 
 ### איך משחקים אחרי פריסה
