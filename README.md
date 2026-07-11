@@ -54,6 +54,22 @@ pnpm test         # unit tests
 
 או ידנית: **New Web Service** → Docker → Dockerfile מהשורש → Plan: Free.
 
+### Auto-deploy (כל commit ל-`main`)
+
+בשירות כבר מוגדר `autoDeployTrigger: commit`, אבל צריך חיבור GitHub תקין (webhook):
+
+1. [Render → chaos-parcel → Settings](https://dashboard.render.com/web/srv-d99956mcjfls73fuf8o0/settings)
+2. ודאו שהריפו `MrMarili/chaos-parcel` מחובר ו־**Auto-Deploy** דולק
+3. אם אין חיבור: [Install Render GitHub App](https://github.com/apps/render) → בחרו את הריפו
+
+**גיבוי (מומלץ):** Deploy Hook + GitHub Action (`.github/workflows/deploy-render.yml`):
+
+1. באותו Settings → **Deploy Hook** → העתיקו את ה-URL
+2. ב-GitHub → Settings → Secrets and variables → Actions → New repository secret  
+   שם: `RENDER_DEPLOY_HOOK` · ערך: ה-URL מהשלב הקודם
+
+אחרי זה כל `git push` ל-`main` יפרוס אוטומטית.
+
 ### איך משחקים אחרי פריסה
 
 1. טלוויזיה/מחשב: `https://YOUR-APP.onrender.com/host`

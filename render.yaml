@@ -6,6 +6,9 @@ services:
     runtime: docker
     plan: free
     region: frankfurt
+    branch: main
+    # Deploy on every push to main (requires Render↔GitHub repo access / webhook)
+    autoDeployTrigger: commit
     healthCheckPath: /health
     dockerContext: .
     dockerfilePath: ./Dockerfile

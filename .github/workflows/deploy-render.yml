@@ -1,0 +1,30 @@
+# Backup auto-deploy: triggers Render when native GitHub webhook is missing.
+# One-time setup:
+# 1. Render Dashboard → chaos-parcel → Settings → Deploy Hook → Copy URL
+# 2. GitHub → Settings → Secrets → Actions → New secret
+#    Name: RENDER_DEPLOY_HOOK  Value: <paste URL>
+name: Deploy to Render
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: render-deploy-main
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render deploy hook
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "Missing secret RENDER_DEPLOY_HOOK."
+            echo "Add it from: Render → chaos-parcel → Settings → Deploy Hook"
+            exit 1
+          fi
+          curl -fsS -X POST "$HOOK"
+          echo "Deploy triggered."
