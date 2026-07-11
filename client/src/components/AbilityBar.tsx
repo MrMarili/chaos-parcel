@@ -5,6 +5,9 @@ interface AbilityBarProps {
   cooldowns: CooldownState;
   onAbility: (ability: AbilityType) => void;
   disabled?: boolean;
+  /** Package holder: show pass when another player is in range. */
+  showPass?: boolean;
+  onPass?: () => void;
 }
 
 const ABILITIES: AbilityType[] = ['FREEZE', 'SHOCKWAVE', 'MAGNET', 'CONFUSION'];
@@ -16,11 +19,17 @@ const ABILITY_CLASS: Record<AbilityType, string> = {
   CONFUSION: 'confusion',
 };
 
-export function AbilityBar({ cooldowns, onAbility, disabled }: AbilityBarProps) {
+export function AbilityBar({
+  cooldowns,
+  onAbility,
+  disabled,
+  showPass = false,
+  onPass,
+}: AbilityBarProps) {
   const activeAbility = ABILITIES.find((ability) => cooldowns[ability] > 0) ?? null;
 
   return (
-    <div className="ability-bar">
+    <div className={`ability-bar${showPass ? ' has-pass' : ''}`}>
       {ABILITIES.map((ability) => {
         const remaining = Math.ceil(cooldowns[ability]);
         const isActive = activeAbility === ability;
@@ -46,6 +55,12 @@ export function AbilityBar({ cooldowns, onAbility, disabled }: AbilityBarProps) 
           </button>
         );
       })}
+      {showPass && onPass && (
+        <button type="button" className="ability-btn pass-ability-btn" onClick={onPass}>
+          <span className="ability-icon">📦</span>
+          <span className="ability-label">מסירה</span>
+        </button>
+      )}
     </div>
   );
 }

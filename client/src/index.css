@@ -612,6 +612,47 @@ h1, h2, h3 {
   position: relative;
   min-height: 0;
   overflow: hidden;
+  background: var(--ink);
+}
+
+/* Keep ability bar usable while holding the package (panic is visual only). */
+.game-layout.is-panic .game-top {
+  z-index: 110;
+}
+
+.package-fuse-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.35rem 0.75rem;
+  margin: 0;
+  padding: 0.55rem 0.75rem 0.35rem;
+  flex-shrink: 0;
+  background: var(--ink);
+}
+
+.package-fuse-label {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.package-fuse-timer {
+  font-family: var(--font-display);
+  font-size: 1.55rem;
+  font-weight: 700;
+  color: var(--amber);
+  text-shadow: 1px 1px 0 var(--outline);
+}
+
+.package-fuse-hint {
+  flex-basis: 100%;
+  text-align: center;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-dim);
 }
 
 .game-bottom {
@@ -624,16 +665,6 @@ h1, h2, h3 {
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-.game-layout.is-panic .game-top {
-  flex: 0 0 auto;
-  min-height: 0;
-}
-
-.game-layout.is-panic .game-bottom {
-  flex: 1;
-  max-height: none;
 }
 
 .joystick-idle-hint {
@@ -660,6 +691,11 @@ h1, h2, h3 {
   padding: 0.4rem 0.75rem;
   flex: 1;
   min-height: 0;
+  background: var(--ink);
+}
+
+.ability-bar.has-pass .pass-ability-btn {
+  grid-column: 1 / -1;
 }
 
 .ability-btn {
@@ -800,11 +836,6 @@ h1, h2, h3 {
   position: fixed;
   inset: 0;
   z-index: 100;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  padding-top: 8vh;
   pointer-events: none;
 }
 
@@ -833,72 +864,18 @@ h1, h2, h3 {
   to { box-shadow: inset 0 0 0 16px rgba(255, 59, 59, 0.85); }
 }
 
-.panic-content {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.5rem;
-  pointer-events: none;
-}
-
-.panic-title {
-  font-family: var(--font-display);
-  font-size: 1.4rem;
-  font-weight: 700;
-  color: #fff;
-  text-shadow: 2px 2px 0 var(--outline);
-  margin: 0;
-  animation: panic-shake 0.35s infinite;
-}
-
-.panic-timer {
-  font-family: var(--font-display);
-  font-size: 2.4rem;
-  font-weight: 700;
-  color: var(--amber);
-  text-shadow: 2px 2px 0 var(--outline);
-  margin: 0;
-}
-
-.panic-pass-hint {
-  margin: 0.35rem 0 0;
-  padding: 0.55rem 0.9rem;
-  max-width: 16rem;
-  border-radius: 12px;
-  background: rgba(8, 18, 32, 0.72);
-  border: 2px solid var(--outline);
-  color: #fff;
-  font-size: 1rem;
-  font-weight: 700;
-  text-align: center;
-  line-height: 1.3;
-}
-
-@keyframes panic-shake {
-  0%, 100% { transform: translateX(0); }
-  25% { transform: translateX(-3px) rotate(-1deg); }
-  75% { transform: translateX(3px) rotate(1deg); }
-}
-
-.pass-btn {
+.ability-btn.pass-ability-btn {
   background: radial-gradient(circle at 35% 30%, #fff, #ffe3d9 70%);
   color: var(--coral-dark);
-  font-family: var(--font-display);
-  font-size: 1.8rem;
-  font-weight: 700;
-  padding: 1.4rem 2.75rem;
-  border-radius: var(--radius-lg);
-  border: 4px solid var(--outline);
-  box-shadow: 0 6px 0 var(--outline), 0 0 40px rgba(255, 59, 59, 0.55);
+  min-height: 72px;
+  border-width: 3px;
+  box-shadow: 0 4px 0 var(--outline), 0 0 24px rgba(255, 59, 59, 0.45);
   animation: pulse 0.5s infinite alternate;
-  pointer-events: auto;
-  margin-top: 0.75rem;
 }
 
-.pass-btn:active {
-  transform: translateY(4px);
-  box-shadow: 0 2px 0 var(--outline);
+.ability-btn.pass-ability-btn:active {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 var(--outline);
 }
 
 @keyframes pulse {

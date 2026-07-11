@@ -9,7 +9,7 @@ import { useMoveSender } from '../hooks/useMoveSender';
 import { ABILITY_LABELS } from '../config';
 import { ABILITY_DESCRIPTIONS } from '../host/hostGameTypes';
 import { EXPLOSION_DISPLAY_MS } from '../host/hostGameTypes';
-import { warmHaptics } from '../utils/haptics';
+import { warmHaptics, pulseHaptic } from '../utils/haptics';
 
 interface GamePageProps {
   playerId: string;
@@ -110,36 +110,51 @@ export function GamePage({
   return (
     <div className={`game-layout ${hasPackage ? 'is-panic' : ''}`}>
       <div className="game-top">
-        {!hasPackage && (
-          <>
-            <p className="game-help">
-              יכולות כאוס — השפעה על שחקנים בזירה (במסך הראשי)
-            </p>
-            <AbilityBar
-              cooldowns={localCooldowns}
-              onAbility={handleAbility}
-              disabled={hasPackage}
-            />
-            <div className="ability-help">
-              <button
-                type="button"
-                className="ability-help-toggle"
-                onClick={() => setShowHelp((v) => !v)}
-              >
-                {showHelp ? 'הסתר' : 'מה כל כפתור עושה?'}
-              </button>
-              {showHelp && (
-                <ul>
-                  {(Object.keys(ABILITY_LABELS) as AbilityType[]).map((key) => (
-                    <li key={key}>
-                      <strong>{ABILITY_LABELS[key]}:</strong> {ABILITY_DESCRIPTIONS[key]}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </>
+        {hasPackage ? (
+          <div className="package-fuse-bar">
+            <span className="package-fuse-label">יש לך את החבילה! 📦</span>
+            {timerSeconds !== undefined && (
+              <span className="package-fuse-timer">{timerSeconds.toFixed(1)}s</span>
+            )}
+            <span className="package-fuse-hint">
+              {canPass ? 'שחקן קרוב — אפשר למסור!' : 'התקרב לשחקן כדי למסור'}
+            </span>
+          </div>
+        ) : (
+          <p className="game-help">
+            יכולות כאוס — השפעה על שחקנים בזירה (במסך הראשי)
+          </p>
         )}
+        <AbilityBar
+          cooldowns={localCooldowns}
+          onAbility={handleAbility}
+          showPass={hasPackage && canPass}
+          onPass={() => {
+            pulseHaptic();
+            onPass();
+          }}
+        />
+        <div className="ability-help">
+          <button
+            type="button"
+            className="ability-help-toggle"
+            onClick={() => setShowHelp((v) => !v)}
+          >
+            {showHelp ? 'הסתר' : 'מה כל כפתור עושה?'}
+          </button>
+          {showHelp && (
+            <ul>
+              {(Object.keys(ABILITY_LABELS) as AbilityType[]).map((key) => (
+                <li key={key}>
+                  <strong>{ABILITY_LABELS[key]}:</strong> {ABILITY_DESCRIPTIONS[key]}
+                </li>
+              ))}
+              <li>
+                <strong>מסירה:</strong> מופיעה כשיש לך חבילה ושחקן בטווח — מוסרת אליו את החבילה
+              </li>
+            </ul>
+          )}
+        </div>
         <div className="round-banner">סיבוב {round}/5</div>
       </div>
 
@@ -148,12 +163,7 @@ export function GamePage({
         <p className="joystick-hint">גע למטה כדי להזיז את הדמות שלך בזירה</p>
       )}
 
-      <PanicOverlay
-        active={hasPackage}
-        canPass={canPass}
-        onPass={onPass}
-        timerSeconds={timerSeconds}
-      />
+      <PanicOverlay active={hasPackage} timerSeconds={timerSeconds} />
 
       {visibleExplosion && (
         <ExplosionOverlay

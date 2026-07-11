@@ -4,9 +4,6 @@ import { pulseHaptic, pulseHapticFromGesture, stopHaptic, warmHaptics } from '..
 
 interface PanicOverlayProps {
   active: boolean;
-  /** Show the pass button only when another player is in range. */
-  canPass?: boolean;
-  onPass: () => void;
   timerSeconds?: number;
 }
 
@@ -16,7 +13,8 @@ interface PanicStyle extends CSSProperties {
 
 const HAPTIC_INTERVAL_MS = 550;
 
-export function PanicOverlay({ active, canPass = false, onPass, timerSeconds }: PanicOverlayProps) {
+/** Visual + haptic panic while holding the package (pass lives in AbilityBar). */
+export function PanicOverlay({ active, timerSeconds }: PanicOverlayProps) {
   useEffect(() => {
     if (!active) return;
 
@@ -50,29 +48,10 @@ export function PanicOverlay({ active, canPass = false, onPass, timerSeconds }: 
   const panicSpeed =
     timerSeconds !== undefined ? `${Math.max(0.15, Math.min(0.6, timerSeconds / 15))}s` : '0.5s';
 
-  const handlePass = () => {
-    if (!canPass) return;
-    pulseHaptic();
-    onPass();
-  };
-
   return (
     <div className="panic-overlay active" style={{ '--panic-speed': panicSpeed } as PanicStyle}>
       <div className="panic-flash-bg" />
       <div className="panic-border-pulse" />
-      <div className="panic-content">
-        <p className="panic-title">יש לך את החבילה! 📦</p>
-        {timerSeconds !== undefined && (
-          <p className="panic-timer">{timerSeconds.toFixed(1)}s</p>
-        )}
-        {canPass ? (
-          <button type="button" className="pass-btn" onClick={handlePass}>
-            למסור! (PASS)
-          </button>
-        ) : (
-          <p className="panic-pass-hint">התקרב לשחקן כדי למסור</p>
-        )}
-      </div>
     </div>
   );
 }
